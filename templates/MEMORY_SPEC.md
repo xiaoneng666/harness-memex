@@ -30,7 +30,7 @@ memory/
         └── _archive/         (可选)已压缩 / 已关闭的归档
 ```
 
-**slug 规范**:`/` 和 `-` 替换成 `_`(如 `feat/0531/example-feature` → `feat_0531_example_feature`)。
+**slug 规范**:`/` 和 `-` 替换成 `_`(如 `feat/<date>/example-feature` → `feat_0531_example_feature`)。
 
 ## 二、JSONL 索引 schema(机器解析)
 
@@ -40,7 +40,7 @@ memory/
   "path": "projects/example-project/branches/feat_0531_example_feature.md",
   "type": "branch",
   "project": "example-project",
-  "branch": "feat/0531/example-feature",
+  "branch": "feat/<date>/example-feature",
   "name": "project-branch-feat-0531-example-feature",
   "description": "一句话摘要",
   "status": "active",
@@ -63,7 +63,7 @@ memory/
 ```json
 {
   "project": "example-project",
-  "branch": "feat/0531/example-feature",
+  "branch": "feat/<date>/example-feature",
   "memory": "projects/example-project/branches/feat_0531_example_feature.md"
 }
 ```
@@ -204,7 +204,7 @@ Claude 平台默认按 cwd 路径建独立 mem_root(`~/.claude/projects/<cwd-slu
 |---|---|---|
 | 同一 Claude session 切换不同 cwd | 每个 cwd 第一次 bash 触发各自 bootstrap | 跨 cwd memory 串 |
 | 同一 cwd 内多分支 | 单 cwd 内分支唯一(原则) → by_branch.jsonl 一键命中 | 同 cwd 同分支重 |
-| 多 cwd 同名分支(repo A / repo B 都有 `feat/0531/x`) | hook 只查当前 cwd 的 by_branch.jsonl,**不跨 cwd glob** | A 拿到 B 的 memory |
+| 多 cwd 同名分支(repo A / repo B 都有 `feat/<date>/x`) | hook 只查当前 cwd 的 by_branch.jsonl,**不跨 cwd glob** | A 拿到 B 的 memory |
 | 同 cwd 含多个 git 子仓库(monorepo) | hook 用 `cd <path>` / `git -C <path>` 拿子项目分支 | 子仓库串顶层 |
 | git worktree(同 repo 多 worktree) | 每个 worktree 是独立 cwd → 各自独立 mem_root | worktree 间串 |
 | detached HEAD(checkout 到 commit hash) | hook target=hash → by_branch 查不到,静默放行 | 用 commit hash 当分支名污染 |

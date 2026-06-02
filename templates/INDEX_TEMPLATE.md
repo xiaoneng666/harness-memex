@@ -4,7 +4,7 @@
 >
 > **全局 Memory 规范**:`~/.claude/MEMORY_SPEC.md`(三层结构 / JSONL schema / LRU / hook 行为)
 > **机器索引**:`_index/meta.jsonl`(LRU)、`_index/by_branch.jsonl`(分支倒排)
-> **查询例**:`jq 'select(.branch=="feat/0531/example")' _index/by_branch.jsonl`
+> **查询例**:`jq 'select(.branch=="feat/<date>/example")' _index/by_branch.jsonl`
 
 ---
 

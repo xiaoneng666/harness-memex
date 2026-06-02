@@ -27,7 +27,7 @@ metadata:
 - project 维度:`projects/<business>/<slug>.md`
 - branch 维度:`projects/<business>/branches/<branch_slug>.md`
   - 其中 `<branch_slug>` 是 `branch_name.replace('/', '_').replace('-', '_')`
-  - 如 `feat/0531/oauth-login` → `feat_0531_oauth_login.md`
+  - 如 `feat/<date>/oauth-login` → `feat_0531_oauth_login.md`
 
 ## 内部链接
 

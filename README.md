@@ -8,9 +8,6 @@
 > **Branch-aware extension pack for Claude Code Auto Memory**
 > 致敬 Vannevar Bush 1945 *Memex* 概念
 
-> **不替代** Anthropic Auto Memory(v2.1.59+ 已经做了 80%)。
-> **补 4 件 Auto Memory 不做的事**:① 分支级 memory ② JSONL schema 索引 ③ 显式 LRU + 软删 ④ 保护分支守卫 + monorepo 子项目识别。
-
 把一次性的 Claude Code 会话,变成**跨会话、跨分支、跨 cwd 持续累积**的长期工作面。
 
 [English](./README.en.md) · [痛点详解](./docs/MOTIVATION.md) · [架构](./docs/ARCHITECTURE.md) · [跟自带 memory 比](./docs/COMPARISON.md) · [5 分钟 Demo](./docs/DEMO.md) · [FAQ](./docs/FAQ.md) · [Roadmap](./docs/ROADMAP.md) · [一键安装](#-安装3-步)
@@ -26,15 +23,15 @@ Memex 补这块:
 ```
 你启动 1 个 Claude 进程,里面可以:
 
-  cwd A (~/proj-a) ─┬─ feat/0531/login    ← 各自独立 memory
-                    ├─ feat/0531/profile     hook 自动按需切换
-                    └─ bugfix/0601/auth      互不串
+  cwd A (~/proj-a) ─┬─ feat/<date>/login    ← 各自独立 memory
+                    ├─ feat/<date>/profile     hook 自动按需切换
+                    └─ bugfix/<date>/auth      互不串
 
-  cwd B (~/proj-b) ─┬─ feat/0531/api-refactor
-                    └─ feat/0531/migration
+  cwd B (~/proj-b) ─┬─ feat/<date>/api-refactor
+                    └─ feat/<date>/migration
 
   cwd C (~/proj-c) ─┬─ main
-                    └─ feat/0601/onboarding
+                    └─ feat/<date>/onboarding
 ```
 
 同一 Claude 对话进程里,你 bash `cd <subdir> && git checkout <branch>` 自由切换 — **每次切换 hook 自动加载/卸载对应 mem_root,Claude 永远在"正确的工作面里"**。
@@ -72,7 +69,7 @@ Claude Code Auto Memory 是 cwd 级一份 memory,**所有 worktree / 子目录�
 切了 `feat/X` 分支,memory 还是 cwd 通用那份,不知道你在哪个分支。
 
 ### 痛点 2 — 分支切换断档
-昨天在 `feat/0531/X` 做到一半,今天切 `bugfix/0601/Y` 修 bug,回来 `feat/0531/X` 时,你**忘了上次写到哪、为什么这么写、还差什么没做**。
+昨天在 `feat/<date>/X` 做到一半,今天切 `bugfix/<date>/Y` 修 bug,回来 `feat/<date>/X` 时,你**忘了上次写到哪、为什么这么写、还差什么没做**。
 
 ### 痛点 3 — 纪律反复重申
 "不要直接 commit 到 main"、"测试要用 staging 凭证不用 prod"、"redis 删 key 走 Lua 脚本"——同一条规则每次新会话都要复述。
@@ -81,7 +78,7 @@ Claude Code Auto Memory 是 cwd 级一份 memory,**所有 worktree / 子目录�
 你写了 50+ 条 .md 当 memory,但**找不到该读哪一条**。Claude 也找不到。
 
 ### 痛点 5 — Monorepo 混乱
-顶层 cwd 一个,下面 N 个 git 子项目。各项目分支名重复(都叫 `feat/0531/x`)。memory 串。
+顶层 cwd 一个,下面 N 个 git 子项目。各项目分支名重复(都叫 `feat/<date>/x`)。memory 串。
 
 ### 痛点 6 — 老 memory 不淘汰
 Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键决策跟过期 TODO 没区分。
@@ -266,11 +263,11 @@ post-write-memory-sync hook 触发 → 自动入 meta.jsonl 索引
 ### 场景 C:切分支
 
 ```
-你说"切到 feat/0531/login"
-Claude 跑 cd subdir && git checkout feat/0531/login
+你说"切到 feat/<date>/login"
+Claude 跑 cd subdir && git checkout feat/<date>/login
 check-protected-branch hook 触发:
-  → 收档:当前分支 feat/0530/profile 的 memory 路径(让 LLM 提醒你补)
-  → 启档:目标 feat/0531/login 的 memory 内容前 200 行直接注入 ctx
+  → 收档:当前分支 feat/<date>/profile 的 memory 路径(让 LLM 提醒你补)
+  → 启档:目标 feat/<date>/login 的 memory 内容前 200 行直接注入 ctx
   → LLM 切完立即知道之前做到哪
 ```
 

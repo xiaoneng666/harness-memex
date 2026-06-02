@@ -53,30 +53,30 @@ claude  # 启动 Claude Code
 **先建两个分支**:
 ```bash
 cd ~/demo/proj-a
-git checkout -b feat/0531/login
+git checkout -b feat/<date>/login
 echo "login" > login.go && git add . && git commit -qm "feat: login skeleton"
-git checkout -b feat/0531/profile
+git checkout -b feat/<date>/profile
 echo "profile" > profile.go && git add . && git commit -qm "feat: profile skeleton"
 ```
 
-**在 Claude 里**(假设当前 feat/0531/profile):
+**在 Claude 里**(假设当前 feat/<date>/profile):
 ```
 > 在 memory 里记一条:profile 用 OAuth 拉头像,storage 走 S3
 ```
 
 Claude 会建 `projects/<biz>/branches/feat_0531_profile.md`。
 
-**切回 feat/0531/login**:
+**切回 feat/<date>/login**:
 ```
-> 跑 cd ~/demo/proj-a && git checkout feat/0531/login
+> 跑 cd ~/demo/proj-a && git checkout feat/<date>/login
 ```
 
 **期望**:
 - `check-protected-branch.sh` hook 触发
 - 你看到 ctx 注入(via system message):
-  - 🔄 切分支 feat/0531/profile → feat/0531/login
-  - 【收档 · feat/0531/profile】memory: ...
-  - 【启档 · feat/0531/login】memory 文件无(因为还没写)
+  - 🔄 切分支 feat/<date>/profile → feat/<date>/login
+  - 【收档 · feat/<date>/profile】memory: ...
+  - 【启档 · feat/<date>/login】memory 文件无(因为还没写)
 - Claude 立即知道现在在 login 分支
 
 ---
@@ -86,7 +86,7 @@ Claude 会建 `projects/<biz>/branches/feat_0531_profile.md`。
 **在同一个 Claude session 里**:
 ```
 > cd ~/demo/proj-b
-> 跑 git checkout -b feat/0531/api-refactor
+> 跑 git checkout -b feat/<date>/api-refactor
 > 在 memory 记: proj-b 用 gRPC + protobuf,接口在 api/v2/ 下
 ```
 
@@ -98,11 +98,11 @@ Claude 会自动:
 **切回 proj-a**:
 ```
 > cd ~/demo/proj-a
-> 跑 git checkout feat/0531/login
+> 跑 git checkout feat/<date>/login
 ```
 
 **期望**:
-- hook 加载 proj-a 的 feat/0531/login memory(如果有)
+- hook 加载 proj-a 的 feat/<date>/login memory(如果有)
 - **proj-b 的 memory 完全不串过来**
 - Claude 知道现在在 proj-a 而不是 proj-b
 

@@ -1,14 +1,14 @@
 ---
 name: example-branch-feat-0531-oauth-login
-description: 例:feat/0531/oauth-login 分支独立工作面 — 进度/思路/状态/链接
+description: 例:feat/<date>/oauth-login 分支独立工作面 — 进度/思路/状态/链接
 metadata:
   type: branch
 ---
 
-# feat/0531/oauth-login 工作面
+# feat/<date>/oauth-login 工作面
 
 > 路径:`projects/example-project/branches/feat_0531_oauth_login.md`
-> 涉及仓库:`<example-project>` · 分支:`feat/0531/oauth-login`
+> 涉及仓库:`<example-project>` · 分支:`feat/<date>/oauth-login`
 
 ## 目标
 

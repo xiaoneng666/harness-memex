@@ -59,7 +59,7 @@
 ## 加新 docs / examples 的 checklist
 
 - [ ] 不带任何具体公司 / 项目 / 服务名 / 凭证
-- [ ] 例子用 `example-project` / `feat/0531/example-feature` 这种泛化
+- [ ] 例子用 `example-project` / `feat/<date>/example-feature` 这种泛化
 - [ ] 中英文都更新(README 双语,docs 可以中文,examples 双语优先)
 
 ## Commit 规范

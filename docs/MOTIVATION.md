@@ -68,7 +68,7 @@
 
 **症状**:
 - 顶层 cwd 一个,下面有 N 个 git 子项目
-- 子项目 A 和 B 都有 `feat/0531/login` 分支
+- 子项目 A 和 B 都有 `feat/<date>/login` 分支
 - Claude 切到 A 的 login,加载了 B 的 memory — 完全错乱
 
 **根因**:Claude 平台按 cwd 隔离 memory,但用户的工作流是**主 cwd 启动 Claude + cd subdir 跑命令**。hook 拿不到正确的 git 仓库根。
@@ -176,7 +176,7 @@ pinned                         → 永不淘汰(用户显式锁)
 - check-protected-branch 解析 `cd <path>` / `git -C <path>` 拿子项目分支
 - pre-edit-branch-notice 从 file_path dirname 反推 git 根
 
-**对痛点 5**:子项目 A 的 `feat/0531/x` 不会串到 B
+**对痛点 5**:子项目 A 的 `feat/<date>/x` 不会串到 B
 
 ### 解 6:失败兜底 ctx 闭环
 
