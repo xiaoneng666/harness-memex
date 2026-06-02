@@ -100,17 +100,47 @@ Memex 的 hook = mechanism,LLM = policy。
 | **脚本不解析复杂 shell** | hook 失败 → ⚠️ ctx → LLM 兜底 |
 | **失败兜底闭环** | never silent fail |
 
-## 灵感来源(论文 + 公开实践)
+## 灵感来源 — 顶级 AI 团队 + 经典工程作品
 
-| 来源 | 借鉴的思想 |
-|---|---|
-| [Anthropic Effective Harnesses](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) | 长跑 agent 的 4 种失败模式 → 我们的 hook 兜底闭环 |
-| [Anthropic Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) | tiered memory + compaction → 我们的 LRU 30d × 3 次 |
-| Vannevar Bush *As We May Think* (1945) | Memex 概念 = associative trails of memory → 我们的项目名 |
-| Linux kernel design | mechanism vs policy → hook = mechanism, LLM = policy |
-| Redis eviction policies | allkeys-lru / volatile-lfu / noeviction → 我们的 status × decay 状态机 |
-| Nginx master-worker | 信号控制 + 优雅 reload → 我们的 silent degrade 哲学 |
-| Vannevar Bush Memex | associative trails of memory → 项目名 |
+我们**不重复造轮子**。下面每条都是 Memex 某个设计的根。
+
+### AI 团队公开实践
+
+| 来源 | 借鉴的思想 | 在 Memex 的体现 |
+|---|---|---|
+| [**Anthropic** — Effective Harnesses for Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) | 长跑 agent 的 4 种失败模式(context rot / tool error / hallucination / drift)| hook 兜底 ctx 闭环 + silent degrade(never silent fail)|
+| [**Anthropic** — Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) | tiered memory + compaction + sub-agent handoff | LRU 30d × 3 次压缩 + status × decay 状态机 |
+| [**Anthropic** — Prompt Caching (refresh-on-use)](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) | 5 分钟 TTL + read-on-access refresh | `pre-read-memory-bump.sh` 维护 last_access 防 LRU 误杀 |
+| [**Anthropic** — Writing Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents) | 工具塞事实不下决策 | hook 只塞事实(path + branch + ctx)不下 SOP |
+| **Anthropic** — Claude Memory Tool(Claude Code 4.x auto-memory) | 自动注入 system prompt | 互补不替代:CLAUDE.md 静态,Memex 动态(见 [COMPARISON.md](./COMPARISON.md))|
+| [**OpenAI** — GPT-4.1 Prompting Guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide) | Persistence / Tool-calling / Planning agent 三件套 | hook + LLM 的 listener/handler 分工 |
+| [**Letta / MemGPT** — "LLM as Operating System"(Packer et al. 2023)](https://arxiv.org/abs/2310.08560) | tiered memory(main / external)+ paging | status × decay 4 阶状态机 + LRU 触发 |
+| [**Voyager**(NVIDIA Jim Fan et al.)](https://voyager.minedojo.org/) | Minecraft 长跑 agent 的 skill library memory | "按 cwd × 分支"的工作面分库思路 |
+| [**Generative Agents**(Stanford, Park et al. 2023)](https://arxiv.org/abs/2304.03442) | memory stream + reflection + retrieval | 未来 P3 的 reflection agent 路线 |
+| **Andrej Karpathy** — "LLM OS" 概念 | LLM = CPU, memory = file system | hook + JSONL = OS-level scheduler + file metadata |
+| [**Cognition Devin** — long-running agent](https://www.cognition.ai/blog) | 持续多天的 agent 任务调度 + memory | 跨 session 的工作面累积设计 |
+
+### 经典工程作品
+
+| 来源 | 借鉴的思想 | 在 Memex 的体现 |
+|---|---|---|
+| **Linux kernel** | mechanism vs policy(Lions' Commentary / Tanenbaum)| hook = mechanism, LLM = policy(强制责任分离)|
+| **Redis** — [eviction policies](https://redis.io/docs/manual/eviction/) | allkeys-lru / volatile-lfu / noeviction + 近似 LRU | status × decay:pinned ≈ noeviction,active 自动 demote ≈ allkeys-lru |
+| **Nginx** — master-worker + signal control | 失败 silent-degrade + 优雅 reload | hook 失败 exit 0 + ⚠️ ctx fallback 给 LLM(信号控制) |
+| **DDIA 第 3 章** — 索引设计(Martin Kleppmann) | append-only + inverted index | JSONL + by_branch.jsonl 倒排索引 |
+| **Vannevar Bush** — [*As We May Think* (1945)](https://www.theatlantic.com/magazine/archive/1945/07/as-we-may-think/303881/) | Memex = associative trails of memory | 项目名 + `[[xxx]]` 内部链接的 associative trails |
+
+### 为啥这么多参考?
+
+因为 **memory + harness for agents 是个真问题**,顶级 AI 团队都在攻:
+
+- Anthropic 在 system prompt + caching 层做
+- OpenAI 在 ChatGPT 服务端做  
+- Letta 在 framework 层做
+- Cursor 在 IDE 层做
+- Cognition Devin 在 agent loop 层做
+
+**Memex 在 Claude Code hook 层做** — 是没人占的空白,但也是离用户开发工作流最近的地方。每个事件触发、每个文件维护,都对应一条公开实践。**抄好抄满 + 自己补缺**。
 
 ## 拓展点(欢迎 PR)
 

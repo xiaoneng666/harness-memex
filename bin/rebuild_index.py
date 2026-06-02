@@ -89,7 +89,7 @@ def infer_project_branch(rel_path):
             idx = parts.index('branches')
             if idx + 1 < len(parts):
                 branch_slug = parts[idx+1].replace('.md', '')
-                # feat_0602_example_feature → feat/0602/example-feature
+                # feat_0602_example_feature → feat/0531/example-feature
                 m = re.match(r'^(feat|bugfix|hotfix|fix)_(\d{4})_(.+)$', branch_slug)
                 if m:
                     branch = f"{m.group(1)}/{m.group(2)}/{m.group(3).replace('_','-')}"

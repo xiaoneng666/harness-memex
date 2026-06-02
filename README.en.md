@@ -208,11 +208,11 @@ Next session, INDEX.md already lists it under "Feedback / Discipline"
 ### C — branch switch
 
 ```
-You: "switch to feat/0521/login"
-Claude runs: cd subdir && git checkout feat/0521/login
+You: "switch to feat/0531/login"
+Claude runs: cd subdir && git checkout feat/0531/login
 check-protected-branch hook fires:
   → archive: current branch feat/0530/profile memory path (LLM should remind you to fill in)
-  → recall: target feat/0521/login memory content (first 200 lines) injected into ctx
+  → recall: target feat/0531/login memory content (first 200 lines) injected into ctx
   → After checkout, LLM immediately knows the prior state
 ```
 

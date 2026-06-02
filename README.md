@@ -1,11 +1,45 @@
 # Memex
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Made for Claude Code](https://img.shields.io/badge/for-Claude%20Code-7B61FF.svg)](https://docs.claude.com/en/docs/claude-code)
+[![Bash + Python](https://img.shields.io/badge/Bash%20%2B%20Python-Lightweight-success.svg)]()
+[![Status: v0.1](https://img.shields.io/badge/Status-v0.1-orange.svg)]()
+
 > **Persistent memory + harness for Claude Code**
 > 致敬 Vannevar Bush 1945 年 *As We May Think* 提出的 Memex(memory extender)概念
 
 把一次性的 Claude Code 会话,变成**跨会话、跨分支、跨 cwd 持续累积**的长期工作面。
 
-[English README](./README.en.md) · [设计哲学](./docs/ARCHITECTURE.md) · [痛点详解](./docs/MOTIVATION.md) · [一键安装](#-安装3-步)
+[English](./README.en.md) · [痛点详解](./docs/MOTIVATION.md) · [架构](./docs/ARCHITECTURE.md) · [跟自带 memory 比](./docs/COMPARISON.md) · [5 分钟 Demo](./docs/DEMO.md) · [FAQ](./docs/FAQ.md) · [Roadmap](./docs/ROADMAP.md) · [一键安装](#-安装3-步)
+
+---
+
+## 🌟 杀手锏特性 — 同一 Claude 进程,N × M 工作面隔离矩阵
+
+**这是 Claude Code 自带 `CLAUDE.md` / `/resume` / 4.x auto-memory 都做不到的:**
+
+```
+你启动 1 个 Claude 进程,里面可以:
+
+  cwd A (~/proj-a) ─┬─ feat/0531/login    ← 各自独立 memory
+                    ├─ feat/0531/profile     hook 自动按需切换
+                    └─ bugfix/0601/auth      互不串
+
+  cwd B (~/proj-b) ─┬─ feat/0531/api-refactor
+                    └─ feat/0531/migration
+
+  cwd C (~/proj-c) ─┬─ main
+                    └─ feat/0601/onboarding
+```
+
+同一 Claude 对话进程里,你 bash `cd <subdir> && git checkout <branch>` 自由切换 — **每次切换 hook 自动加载/卸载对应 mem_root,Claude 永远在"正确的工作面里"**,从不串记忆。
+
+这背后是:
+- `~/.claude/projects/<cwd-slug>/memory/` **每 cwd 独立 mem_root**
+- `_index/by_branch.jsonl` **每分支倒排索引**
+- `check-protected-branch.sh` 切分支时**收档当前 + 启档目标 + 注入目标 memory 前 200 行进 ctx**
+- `pre-edit-branch-notice.sh` 编辑前**用 `cd <path>` / `git -C <path>` 反推子项目分支**
+- 严格不跨 cwd glob → **多个项目同名分支不会串**
 
 ---
 
@@ -30,7 +64,7 @@
 每次新会话,都要把项目背景、架构决策、踩过的坑**重新讲一遍**。Claude 没有跨 session 的长期记忆。
 
 ### 痛点 2 — 分支切换断档
-昨天在 `feat/0521/X` 做到一半,今天切 `bugfix/0602/Y` 修 bug,回来 `feat/0521/X` 时,你**忘了上次写到哪、为什么这么写、还差什么没做**。
+昨天在 `feat/0531/X` 做到一半,今天切 `bugfix/0601/Y` 修 bug,回来 `feat/0531/X` 时,你**忘了上次写到哪、为什么这么写、还差什么没做**。
 
 ### 痛点 3 — 纪律反复重申
 "不要直接 commit 到 main"、"测试要用 staging 凭证不用 prod"、"redis 删 key 走 Lua 脚本"——同一条规则每次新会话都要复述。
@@ -39,7 +73,7 @@
 你写了 50+ 条 .md 当 memory,但**找不到该读哪一条**。Claude 也找不到。
 
 ### 痛点 5 — Monorepo 混乱
-顶层 cwd 一个,下面 N 个 git 子项目。各项目分支名重复(都叫 `feat/0521/x`)。memory 串。
+顶层 cwd 一个,下面 N 个 git 子项目。各项目分支名重复(都叫 `feat/0531/x`)。memory 串。
 
 ### 痛点 6 — Context 爆炸
 长开发周期跨数十个 session,memory 累积到上百条。**有用的几条沉在大海里**。
@@ -218,11 +252,11 @@ post-write-memory-sync hook 触发 → 自动入 meta.jsonl 索引
 ### 场景 C:切分支
 
 ```
-你说"切到 feat/0521/login"
-Claude 跑 cd subdir && git checkout feat/0521/login
+你说"切到 feat/0531/login"
+Claude 跑 cd subdir && git checkout feat/0531/login
 check-protected-branch hook 触发:
   → 收档:当前分支 feat/0530/profile 的 memory 路径(让 LLM 提醒你补)
-  → 启档:目标 feat/0521/login 的 memory 内容前 200 行直接注入 ctx
+  → 启档:目标 feat/0531/login 的 memory 内容前 200 行直接注入 ctx
   → LLM 切完立即知道之前做到哪
 ```
 
