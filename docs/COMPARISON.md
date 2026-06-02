@@ -14,7 +14,7 @@
 | 结构化分类(6 类) | ❌ 一坨 markdown | ❌ | ❌ | tiered memory | **✓** feedback/reference/user/global/project/branch |
 | 索引查询 | grep | 向量(语义)| 向量 | tiered paging | **✓** JSONL O(1) jq 命中 |
 | LRU 淘汰(防 context bloat) | ❌ | ❌ 静默丢 | ❌ | ✓ tiered | **✓** 30d × 3 次压缩 + pinned |
-| 事件驱动(git/Read/Write 触发)| ❌ | ❌ | ❌ | ❌ | **✓** 5 hooks |
+| 事件驱动(git/Read/Write 触发)| ❌ | ❌ | ❌ | ❌ | **✓** 7 hooks |
 | 失败兜底(LLM 自动接管)| N/A | N/A | N/A | N/A | **✓** |
 | 开源 + 可拓展 | ❌ 闭源 | ❌ 闭源 | ❌ 闭源 | ✓ | ✓ MIT |
 | 零锁定(都是 .md + .jsonl)| ✓ | ❌ | ❌ | ❌ | ✓ |
@@ -41,7 +41,7 @@
 | 不会按分支变化(切分支后 CLAUDE.md 还是同一份)| `check-protected-branch.sh` 切分支自动加载目标分支 memory |
 | 不会按 cwd 子项目变化(monorepo 下子项目分支 hook 抓不到)| 多 cwd 隔离 + `cd <subdir>` / `git -C` 解析 |
 | `/resume` 只接续最近一次,跨数十 session 不顶 | jsonl 索引 + LRU 让数百条 memory 不爆 |
-| 没有"自动维护"概念(要你手动改)| 5 个 hook 把事件转译成自动维护动作 |
+| 没有"自动维护"概念(要你手动改)| 7 个 hook 把事件转译成自动维护动作 |
 | 没有自动压缩(老决策跟新决策一起占 context)| 30d × 3 次自动压缩到骨架 |
 
 **结论**:**Memex 跟 CLAUDE.md 不冲突,完全互补**。

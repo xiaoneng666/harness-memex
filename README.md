@@ -97,7 +97,7 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
                        │ tools (Read/Write/Edit/Bash)
                 ┌──────▼──────┐
                 │   Hooks     │ ← event listener
-                │  (5 件套)    │   只塞事实,不做决策
+                │  (7 件套)    │   只塞事实,不做决策
                 └──────┬──────┘
                        │ ctx 注入 / 索引同步
         ┌──────────────▼──────────────┐
@@ -298,7 +298,7 @@ LLM 逐个 Read → 写紧凑版 → lru_compact.py --mark <path> 1 更新 decay
 ```
 
 会:
-- 删 `~/.claude/hooks/{5 件套}.sh` 和 `~/.claude/bin/{3 工具}.py`
+- 删 `~/.claude/hooks/{7 件套}.sh` 和 `~/.claude/bin/{3 工具}.py`
 - 从 `~/.claude/settings.json` 移除对应 hook 注册(备份保留)
 - **保留所有 `~/.claude/projects/*/memory/`**(你的工作面不丢)
 
@@ -324,6 +324,36 @@ LLM 逐个 Read → 写紧凑版 → lru_compact.py --mark <path> 1 更新 decay
 - **Linux kernel** — *mechanism not policy*(hook = mechanism,LLM = policy)
 - **Redis** — eviction policies(LRU 状态机参照)
 - **Nginx** — master-worker 信号控制(hook 失败 silent degrade)
+
+---
+
+## ❓ FAQ
+
+### Q: 跟 Claude Code 自带的 CLAUDE.md 冲突吗?
+**A**:完全不冲突,**互补**。CLAUDE.md 放项目静态元信息,Memex 管动态工作面;bootstrap 智能检测 MEMORY.md 状态:不存在 → 软链 INDEX.md;Auto Memory 写过的 → 末尾追加 `@INDEX.md` 幂等。详见 [docs/AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md)。
+
+### Q: 会影响 Claude Code 性能吗?
+**A**:几乎无感。hook 平均 < 50ms / 次;post-write-sync 全量 reindex 在 N=50 条时约 30ms;LRU 扫是手动跑,不影响日常。
+
+### Q: 会增加 Claude 的 token 消耗吗?
+**A**:**平均略减少**。每次新 session 不用重新解释项目(原来 5-10 分钟 prompt 不再需要);切分支自动注入 memory 替代 LLM 多次 Read。代价是 hook ctx 注入每次平均 200-500 tokens,净效果省下"重新解释"的成本远超 ctx 注入。
+
+### Q: 卸载后 memory 数据丢吗?
+**A**:不丢。`uninstall.sh` 只删 hooks + 工具 + settings.json 注册,**所有 memory 数据保留在 `~/.claude/projects/*/memory/`**。重装 `install.sh` 立即接续。
+
+### Q: 跟向量检索 RAG 比怎样?
+**A**:**不同的设计目标**。向量 RAG 做语义检索海量非结构化文档,答用户问题;Memex 是结构化的工作面 memory,自动维护 + 自动注入 ctx。两者可以共存:Memex 管"我的工作面",RAG 管"项目文档库"。
+
+### Q: 团队怎么协作?memory 能共享吗?
+**A**:**memory 默认是个人的**(在 `~/.claude/` 下)。如果想团队共享:把 `feedback/` 和 `reference/` 软链到一个 git repo 用 PR 协同即可。**branch memory 不建议共享**,它反映个人开发上下文,共享会污染。
+
+### Q: hook 死循环 / 误拦怎么办?
+**A**:临时禁:`mv ~/.claude/hooks ~/.claude/hooks.disabled`,排查完再 mv 回来。`install.sh` 改 settings 前必备份(`*.memex-backup-<timestamp>`),恢复 `cp` 回来即可。
+
+### Q: 必须用 Claude Code 吗?Cursor / Aider 能用吗?
+**A**:**目前只支持 Claude Code**(基于其 hook API)。理论上可以适配 Cursor / Aider / Cline(它们都有 hook 或 plugin 系统),欢迎贡献。Windows 暂未测试,需 WSL / Git Bash。
+
+> 更多问题(共 20+ 条,含设计哲学 / 故障排查 / 演进):见 [docs/FAQ.md](./docs/FAQ.md)
 
 ---
 

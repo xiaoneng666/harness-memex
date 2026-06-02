@@ -3,7 +3,7 @@
 #
 # 做的事:
 #   1. 从 ~/.claude/settings.json 移除 memex hook 注册(原文件备份)
-#   2. 删 ~/.claude/hooks/{5 件套}.sh 和 ~/.claude/bin/{3 工具}.py
+#   2. 删 ~/.claude/hooks/{7 件套}.sh 和 ~/.claude/bin/{3 工具}.py
 #   3. 保留 ~/.claude/MEMORY_SPEC.md 和 INDEX_TEMPLATE.md(参考价值)
 #   4. **保留所有 ~/.claude/projects/*/memory/**(你的工作面不丢)
 
@@ -17,14 +17,14 @@ SETTINGS="$DOTCLAUDE/settings.json"
 C_OK="\033[32m✓\033[0m"
 C_WARN="\033[33m⚠\033[0m"
 
-MEMEX_HOOKS="session-bootstrap.sh pre-read-memory-bump.sh check-protected-branch.sh pre-edit-branch-notice.sh post-write-memory-sync.sh"
+MEMEX_HOOKS="session-bootstrap.sh pre-read-memory-bump.sh check-protected-branch.sh pre-edit-branch-notice.sh post-checkout-handoff.sh post-write-memory-sync.sh session-start-lru.sh"
 MEMEX_BINS="rebuild_index.py update_index_md.py lru_compact.py"
 
 echo "╭─────────────────────────────────────────╮"
 echo "│  harness-memex uninstall                "
 echo "├─────────────────────────────────────────┤"
 echo "│  会删:                                   "
-echo "│    · 5 个 hook 脚本                       "
+echo "│    · 7 个 hook 脚本                       "
 echo "│    · 3 个 python 工具                     "
 echo "│    · settings.json 里的 hook 注册         "
 echo "│  会保留:                                  "
@@ -78,7 +78,8 @@ for event in list(cfg.get('hooks', {}).keys()):
             cmd = h.get('command', '')
             if 'session-bootstrap.sh' in cmd or 'pre-read-memory-bump.sh' in cmd \
                or 'check-protected-branch.sh' in cmd or 'pre-edit-branch-notice.sh' in cmd \
-               or 'post-write-memory-sync.sh' in cmd:
+               or 'post-checkout-handoff.sh' in cmd or 'post-write-memory-sync.sh' in cmd \
+               or 'session-start-lru.sh' in cmd:
                 keep = False
                 removed += 1
                 break

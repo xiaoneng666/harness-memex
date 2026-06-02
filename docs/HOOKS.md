@@ -1,6 +1,6 @@
 # Hooks 详解
 
-5 个 hook,event listener 模式。装到 `~/.claude/hooks/` 后,通过 `~/.claude/settings.json` 注册到 Claude Code 的 PreToolUse/PostToolUse 事件。
+7 个 hook,event listener 模式。装到 `~/.claude/hooks/` 后,通过 `~/.claude/settings.json` 注册到 Claude Code 的 PreToolUse/PostToolUse 事件。
 
 ## hook 通用约定
 

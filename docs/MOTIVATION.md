@@ -108,7 +108,7 @@
 ```
 ~/.claude/                          全局,任何 cwd 共享
 ├── MEMORY_SPEC.md                  规范单一权威
-├── hooks/  (5 件套)                 event listener
+├── hooks/  (7 件套)                 event listener
 └── bin/    (3 工具)                 python CLI
 
 ~/.claude/projects/<cwd-slug>/memory/    每 cwd 独立
@@ -132,7 +132,7 @@
 ```
 事件(git/Edit/Read/Bash)
      ↓
-hook 监听(确定性,机器层)   ← 5 件套
+hook 监听(确定性,机器层)   ← 7 件套
      ↓ 把"事实"塞 ctx
 LLM 收到 ctx(语义层,动态)
      ↓ 自决策做什么
@@ -144,7 +144,7 @@ Write/Edit memory(persistent state)
 
 **对痛点 7**:hook 失败时通过 `hookSpecificOutput.additionalContext` 塞 ⚠️ ctx,LLM 看得到 → 接管
 
-### 解 3:5 个 Hook(event listener)
+### 解 3:7 个 Hook(event listener)
 
 | Hook | 解的痛点 | 怎么解 |
 |---|---|---|

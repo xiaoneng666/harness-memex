@@ -34,7 +34,7 @@
   - 可视化 by_branch.jsonl 关联图谱
   - 时间线展示 last_access / decay 演化
 - [ ] **Cursor 适配**
-  - Cursor 有 [hook system](https://docs.cursor.com/hooks),可移植 5 个 hook
+  - Cursor 有 [hook system](https://docs.cursor.com/hooks),可移植 7 个 hook
 - [ ] **Aider 适配**
   - Aider 有 plugin system
 - [ ] **VSCode 插件**

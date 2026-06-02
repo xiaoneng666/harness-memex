@@ -50,7 +50,7 @@ If you use Claude Code heavily, these will be familiar:
                        │ tools
                 ┌──────▼──────┐
                 │   Hooks     │ ← event listener
-                │  (5 of them)│   inject facts, never decide
+                │  (7 of them)│   inject facts, never decide
                 └──────┬──────┘
                        │ ctx injection / index sync
         ┌──────────────▼──────────────┐
@@ -65,7 +65,7 @@ If you use Claude Code heavily, these will be familiar:
         └──────────────────────────────┘
 ```
 
-### 5 hooks (all event listeners)
+### 7 hooks (all event listeners)
 
 | Hook | Trigger | What it does |
 |---|---|---|
@@ -270,6 +270,36 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 - **Linux kernel** — *mechanism not policy* (hook = mechanism, LLM = policy)
 - **Redis** — eviction policies (LRU state machine reference)
 - **Nginx** — master-worker signal control (hook silent-degrade on failure)
+
+---
+
+## ❓ FAQ
+
+### Q: Does it conflict with Claude Code's built-in CLAUDE.md?
+**A**: No conflict — they're **complementary**. CLAUDE.md holds static project metadata; Memex manages the dynamic work surface. The bootstrap script detects MEMORY.md state: if absent → symlink INDEX.md; if Auto Memory already wrote to it → append `@INDEX.md` idempotently. See [docs/AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md).
+
+### Q: Will it slow down Claude Code?
+**A**: Negligible overhead. Hooks average < 50ms per call; post-write-sync full reindex takes ~30ms at N=50 entries; LRU sweeps run manually, not in the hot path.
+
+### Q: Will it increase Claude's token cost?
+**A**: **Slightly reduces it on average.** You stop re-explaining your project every new session (the 5–10 min priming prompt goes away), and branch switches auto-inject memory instead of having the LLM Read multiple files to catch up. Hook ctx injection adds ~200–500 tokens per call — the savings on "re-explaining" far outweigh injection cost.
+
+### Q: Does uninstalling lose my memory data?
+**A**: No. `uninstall.sh` only removes hooks, tools, and settings.json registration. **All memory data stays in `~/.claude/projects/*/memory/`.** Reinstall with `install.sh` and pick up where you left off.
+
+### Q: How does it compare to vector / RAG retrieval?
+**A**: **Different design goals.** Vector RAG does semantic search over large unstructured corpora to answer user questions. Memex is structured work-surface memory, auto-maintained and auto-injected into context. They coexist nicely: Memex owns "my working state", RAG owns "the project doc library".
+
+### Q: How does team collaboration work? Can memory be shared?
+**A**: **Memory is personal by default** (under `~/.claude/`). For team sharing: symlink `feedback/` and `reference/` to a shared git repo and collaborate via PR. **Branch memory should not be shared** — it reflects personal development context and sharing pollutes it.
+
+### Q: What if a hook loops or blocks me incorrectly?
+**A**: Temporary disable: `mv ~/.claude/hooks ~/.claude/hooks.disabled`, then `mv` back after triage. `install.sh` always backs up settings before editing (`*.memex-backup-<timestamp>`); `cp` it back to recover.
+
+### Q: Does it require Claude Code? Can Cursor / Aider use it?
+**A**: **Claude Code only for now** (built on its hook API). It could be ported to Cursor / Aider / Cline (all have hook or plugin systems) — contributions welcome. Windows is untested; WSL / Git Bash recommended.
+
+> More questions (20+ entries covering design philosophy, troubleshooting, roadmap): see [docs/FAQ.md](./docs/FAQ.md) (Chinese — English readers should still find it clear).
 
 ---
 
