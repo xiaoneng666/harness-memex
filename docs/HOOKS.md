@@ -72,7 +72,7 @@ jq -c --arg p "$rel" --arg now "$now" \
 
 **自定义保护分支**:
 ```bash
-export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"
+export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"  # 例子,可加自己仓库的
 ```
 
 **兜底 ctx**:

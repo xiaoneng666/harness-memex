@@ -20,7 +20,7 @@ fi
 branch=$(git -C "$git_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
 # ─── 保护分支列表 ───
-DEFAULT_PROTECTED="main master develop production"
+DEFAULT_PROTECTED="main develop production staging"
 PROTECTED_BRANCHES="${MEMEX_PROTECTED_BRANCHES:-$DEFAULT_PROTECTED}"
 
 is_protected() {

@@ -230,8 +230,8 @@ ls ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/
 环境变量在 `~/.zshrc` / `~/.bashrc` 里:
 
 ```bash
-# 自定义保护分支(默认: main master develop production)
-export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"
+# 自定义保护分支(默认: main develop production staging)
+export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"  # 例子,可加自己仓库的
 
 # 自定义 LRU 周期天数(默认: 30)
 export MEMEX_LRU_PERIOD_DAYS=30

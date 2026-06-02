@@ -178,8 +178,8 @@ If you see `INDEX.md _index/ feedback/ projects/ ...`, you're set.
 In `~/.zshrc` / `~/.bashrc`:
 
 ```bash
-# Custom protected branches (default: main master develop production)
-export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"
+# Custom protected branches (default: main develop production staging)
+export MEMEX_PROTECTED_BRANCHES="main master develop staging production release"  # 例子,可加自己仓库的
 
 # Custom LRU period in days (default: 30)
 export MEMEX_LRU_PERIOD_DAYS=30

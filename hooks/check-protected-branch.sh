@@ -20,7 +20,7 @@ input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)
 
 # ─── 保护分支列表(env var > default)───
-DEFAULT_PROTECTED="main master develop production"
+DEFAULT_PROTECTED="main develop production staging"
 PROTECTED_BRANCHES="${MEMEX_PROTECTED_BRANCHES:-$DEFAULT_PROTECTED}"
 
 is_protected() {
@@ -36,17 +36,26 @@ is_protected() {
 resolve_git_dir() {
   local c="$1"
   local trimmed="${c#"${c%%[![:space:]]*}"}"
+  local p
   case "$trimmed" in
     "git -C "*)
-      printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/' | head -1
-      return
+      p=$(printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/' | head -1)
       ;;
     "cd "*)
-      printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1
+      p=$(printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1)
+      ;;
+    *)
+      echo "."
       return
       ;;
   esac
-  echo "."
+  # 展开 ~ 为 $HOME(否则 git -C 不识别字面 ~)
+  # 注意:${p#~/} 里的 ~ 会被 bash 展开成 $HOME;必须双引号让它字面
+  case "$p" in
+    "~/"*) p="${HOME}/${p#"~/"}" ;;
+    "~")   p="${HOME}" ;;
+  esac
+  echo "$p"
 }
 
 # ─── 只查当前 cwd 对应的 mem_root(防跨 cwd 同名分支串,见 spec § 九)───

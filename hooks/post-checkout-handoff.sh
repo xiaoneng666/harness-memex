@@ -36,17 +36,26 @@ esac
 resolve_git_dir() {
   local c="$1"
   local trimmed="${c#"${c%%[![:space:]]*}"}"
+  local p
   case "$trimmed" in
     "git -C "*)
-      printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/' | head -1
-      return
+      p=$(printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/' | head -1)
       ;;
     "cd "*)
-      printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1
+      p=$(printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1)
+      ;;
+    *)
+      echo "."
       return
       ;;
   esac
-  echo "."
+  # 展开 ~ 为 $HOME(否则 git -C 不识别字面 ~)
+  # 注意:${p#~/} 里的 ~ 会被 bash 展开成 $HOME;必须双引号让它字面
+  case "$p" in
+    "~/"*) p="${HOME}/${p#"~/"}" ;;
+    "~")   p="${HOME}" ;;
+  esac
+  echo "$p"
 }
 
 git_dir=$(resolve_git_dir "$cmd")
@@ -116,7 +125,7 @@ if [ -n "$from_mem" ]; then
 else
   if [ -n "$from_branch" ]; then
     case "$from_branch" in
-      main|master|develop|production) : ;;  # 保护分支不强求建
+      main|develop|production|staging) : ;;  # 保护分支不强求建
       *)
         suggested=$(suggest_branch_memory_path "$from_branch")
         ctx="$ctx
