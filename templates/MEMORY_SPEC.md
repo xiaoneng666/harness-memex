@@ -151,11 +151,13 @@ metadata:
 
 | Hook 文件 | 触发 | 动作 |
 |---|---|---|
-| `session-bootstrap.sh` | PreToolUse(任何工具)| 检测 `_index/` 缺失或漂移 → 自动建骨架 + rebuild_index |
+| `session-bootstrap.sh` | PreToolUse(任何工具)| 检测 `_index/` 缺失或漂移 → 自动建骨架 + rebuild_index + Auto Memory 协作(@INDEX.md)|
 | `pre-read-memory-bump.sh` | PreToolUse Read | Read 路径在 `memory/**/*.md` → 更新 `meta.jsonl` 的 `last_access` |
-| `check-protected-branch.sh` | PreToolUse Bash | git commit/push 到保护分支拦截;git checkout/switch 时收档+启档 |
+| `check-protected-branch.sh` | PreToolUse Bash | git commit/push 到保护分支拦截(checkout/switch 段移到 post-checkout-handoff)|
 | `pre-edit-branch-notice.sh` | PreToolUse Edit/Write | 每 session 每分支首次编辑提醒分支 memory |
+| `post-checkout-handoff.sh` | PostToolUse Bash | git checkout/switch 成功后,塞 ctx 让 LLM **并行 Write a + Read b** |
 | `post-write-memory-sync.sh` | PostToolUse Write/Edit/MultiEdit | file_path matches `memory/**/*.md` → 自动增量入索引 |
+| `session-start-lru.sh` | SessionStart | 主动跑 `lru_compact.py --quiet`,有候选塞 ctx 让 LLM 自决策压缩 |
 
 **Hook 工程纪律**:
 - 失败永远 `exit 0`(不阻断 LLM 工作)— 除了保护分支拦 commit/push 那个故意 exit 2
