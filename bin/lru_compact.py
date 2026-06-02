@@ -122,9 +122,11 @@ def fmt_size(b):
     return f'{b/1024/1024:.1f}MB'
 
 
-def cmd_scan(mem_root):
+def cmd_scan(mem_root, quiet=False):
     idx = os.path.join(mem_root, '_index', 'meta.jsonl')
     if not os.path.exists(idx):
+        if quiet:
+            return  # hook 静默
         print(f'❌ meta.jsonl 不存在: {idx} — 先跑 rebuild_index.py', file=sys.stderr)
         sys.exit(1)
 
@@ -140,6 +142,15 @@ def cmd_scan(mem_root):
         stage = categorize(r)
         if stage in buckets:
             buckets[stage].append(r)
+
+    # --quiet 模式:hook 用,只输出 key:N 行
+    if quiet:
+        print(f"compact_1:{len(buckets['pending_compact_1'])}")
+        print(f"compact_2:{len(buckets['pending_compact_2'])}")
+        print(f"compact_3:{len(buckets['pending_compact_3'])}")
+        print(f"pending_delete:{len(buckets['pending_delete'])}")
+        print(f"awaiting_delete:{len(buckets['awaiting_user_authorize_delete'])}")
+        return
 
     print(f'# LRU 周扫报告 — {mem_root}')
     print(f'# 周期 {PERIOD_DAYS}d × 3 次压缩 + 候选删除,见 ~/.claude/MEMORY_SPEC.md § 三')
@@ -180,6 +191,86 @@ def cmd_scan(mem_root):
     print('  python3 ~/.claude/bin/lru_compact.py --mark <rel_path> <new_decay>')
     print('锁某条永不淘汰(开发中分支等):')
     print('  python3 ~/.claude/bin/lru_compact.py --pin <rel_path>')
+    print('真删一条(必须 status=candidate_to_delete + last_access ≥ 60d):')
+    print('  python3 ~/.claude/bin/lru_compact.py --rm <rel_path>')
+
+
+def cmd_rm(rel_path, mem_root, force=False):
+    """显式删除一条 memory(带安全闸门 + 软删 _trash/)。
+
+    安全闸门:
+      1. status 必须是 candidate_to_delete(除非 --force)
+      2. last_access 必须 ≥ 60 天前(防误删活跃)
+      3. 删之前 dump 前 10 行 + metadata 让用户确认
+      4. 软删:mv 到 _trash/<UTC>_<basename>(30d 后真清,P1 待做)
+      5. 从 meta.jsonl + by_branch.jsonl 移除
+    """
+    import shutil
+    idx = os.path.join(mem_root, '_index', 'meta.jsonl')
+    by_branch = os.path.join(mem_root, '_index', 'by_branch.jsonl')
+    records = load_meta(idx)
+
+    target = None
+    for r in records:
+        if r.get('path') == rel_path:
+            target = r
+            break
+    if not target:
+        print(f'❌ {rel_path} 不在 meta.jsonl 里', file=sys.stderr)
+        sys.exit(1)
+
+    # 闸门 1: status
+    if target.get('status') != 'candidate_to_delete' and not force:
+        print(f'❌ {rel_path} status={target.get("status")},不是 candidate_to_delete', file=sys.stderr)
+        print('   只有状态为 candidate_to_delete 的才能 rm。先跑 LRU 流程让它进入候选,', file=sys.stderr)
+        print('   或加 --force 强制(危险)。', file=sys.stderr)
+        sys.exit(2)
+
+    # 闸门 2: last_access ≥ 60d
+    days = days_since(target.get('last_access'))
+    if days < 60 and not force:
+        print(f'❌ {rel_path} 仅 {int(days)}d 未 access(< 60d),refuse 删除(防误删活跃)', file=sys.stderr)
+        print('   加 --force 强制(危险)。', file=sys.stderr)
+        sys.exit(2)
+
+    full = os.path.join(mem_root, rel_path)
+    if not os.path.exists(full):
+        print(f'⚠️ 源文件 {full} 已不存在,直接清索引', file=sys.stderr)
+    else:
+        # 闸门 3: dump 前 10 行
+        print(f'# 即将删除: {rel_path}')
+        print(f'#   status: {target.get("status")}, last_access: {target.get("last_access")}, size: {target.get("size")}B, decay: {target.get("decay")}')
+        print(f'#   description: {target.get("description", "")}')
+        print('# 内容前 10 行:')
+        try:
+            with open(full, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f):
+                    if i >= 10: break
+                    print(f'#   {line.rstrip()}')
+        except Exception as e:
+            print(f'#   (无法读取: {e})')
+
+        # 闸门 4: 软删到 _trash/
+        trash = os.path.join(mem_root, '_trash')
+        os.makedirs(trash, exist_ok=True)
+        timestamp = now_utc().strftime('%Y%m%dT%H%M%SZ')
+        basename = os.path.basename(rel_path)
+        trash_path = os.path.join(trash, f'{timestamp}_{basename}')
+        shutil.move(full, trash_path)
+        print(f'✓ 软删 → {trash_path}(30d 后真清)')
+
+    # 闸门 5: 移除索引
+    records = [r for r in records if r.get('path') != rel_path]
+    atomic_write_jsonl(idx, records)
+
+    # by_branch.jsonl 同步
+    if os.path.exists(by_branch):
+        with open(by_branch, 'r', encoding='utf-8') as f:
+            br = [json.loads(l) for l in f if l.strip()]
+        br = [r for r in br if r.get('memory') != rel_path]
+        atomic_write_jsonl(by_branch, br)
+
+    print(f'✓ 从索引移除: {rel_path}')
 
 
 def cmd_mark(rel_path, new_decay, mem_root):
@@ -287,6 +378,22 @@ def main():
             print('用法: --pin <rel_path> [<mem_root>] / --unpin <rel_path> [<mem_root>]', file=sys.stderr)
             sys.exit(1)
         cmd_pin(args[1], args[2] if len(args) > 2 else default_mem_root, unpin=(args[0] == '--unpin'))
+        return
+
+    if args and args[0] == '--quiet':
+        mem_root = args[1] if len(args) > 1 else default_mem_root
+        cmd_scan(mem_root, quiet=True)
+        return
+
+    if args and args[0] == '--rm':
+        if len(args) < 2:
+            print('用法: --rm <rel_path> [<mem_root>] [--force]', file=sys.stderr)
+            sys.exit(1)
+        rel = args[1]
+        force = '--force' in args[2:]
+        rest = [a for a in args[2:] if a != '--force']
+        mem_root = rest[0] if rest else default_mem_root
+        cmd_rm(rel, mem_root, force=force)
         return
 
     if args and args[0] == '--detect-deleted-branches':

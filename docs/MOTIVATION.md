@@ -7,27 +7,29 @@
 
 ## Part 1 — 痛点(Why)
 
-### 痛点 1:Claude 跨 session 的记忆是 0
+### 痛点 1:Claude Code Auto Memory 不分支感知
 
 **症状**:
-- 每次新对话,Claude 不记得这个项目长什么样
-- 你必须每次重新解释架构、技术栈、踩过的坑
-- 一周前讲过的偏好,这周又讲一遍
+- Auto Memory 跨 session 学习用户偏好 ✓(Anthropic 已经做了)
+- 但 Auto Memory **不切分支**:文档原话 "All worktrees and subdirectories of a project share the same memory directory"
+- 你在 feat/X 学到的"踩过的坑",切到 feat/Y 时 memory 仍然是同一份
 
-**根因**:Claude Code 默认是**单 session 记忆**。session 结束 = 上下文全丢。`/resume` 也只能续接最近一次,跨多 session 的项目知识没地方放。
+**根因**:Anthropic 的设计决策(不是 bug),Auto Memory 是 cwd 级。
+**Memex 补的**:在 Auto Memory 之上加 cwd × 分支 二维隔离矩阵。
 
 **痛苦量化**:开发一个中型功能 = 10-30 个 session。每个 session 开头 5-10 分钟的"重新介绍" = 整个项目周期浪费 1-3 小时纯重复劳动。
 
 ---
 
-### 痛点 2:切分支断档(branch-switch blackout)
+### 痛点 2:切分支后 Claude 不知道现在该干啥
 
 **症状**:
-- 昨天在 `feat/0531/X` 做到一半,处理完别的事回来,**忘了卡在哪、为什么这么写**
-- 一周开 5 个分支,每次切都要重新进入状态
-- 紧急修了 bugfix 切回 feat,Claude 像没事一样,但你脑子里上下文已经被冲掉
+- 你 bash `git checkout feat/Y`,Claude 仍然在 feat/X 的上下文里答问题
+- 一天切 5 次,每次都要重述"我现在在 Y 分支做 oauth"
+- 切回旧分支时,**Claude 不会自动加载旧分支的进度 memory**
 
-**根因**:git 切分支是即时的,但**人脑的"上下文切换" + LLM 的"context 接续"** 完全没自动化。
+**根因**:Auto Memory 是 cwd 级,不感知 git 分支事件。
+**Memex 补的**:`post-checkout-handoff.sh` PostToolUse 检测切完成,塞 ctx 让 LLM 主动并行 Write a memory + Read b memory。
 
 **痛苦量化**:每次切分支 + 重新进入状态 ≈ 10-20 分钟。一天切 5 次 = 50-100 分钟 / 天纯 context 重建。
 

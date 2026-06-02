@@ -137,3 +137,22 @@
 它们不互斥。Memex 跟 CLAUDE.md 配合用最佳:
 - CLAUDE.md 放静态项目元信息
 - Memex 管动态工作面 + 跨分支跨 cwd 隔离
+
+
+---
+
+## Prior Art — 这个生态位上其它项目
+
+详细对比:[PRIOR-ART.md](./PRIOR-ART.md)
+
+简表:
+- [`Davidcreador/claude-code-branch-memory-manager`](https://github.com/Davidcreador/claude-code-branch-memory-manager) — 跟 Memex 最像,纯 git hook 切分支
+- [`coleam00/claude-memory-compiler`](https://github.com/coleam00/claude-memory-compiler) — 编译式 CLAUDE.md
+- [`codenamev/claude_memory`](https://github.com/codenamev/claude_memory) — Ruby gem
+
+Memex 跟它们的差异:
+1. 跟 **Auto Memory 协作**(`@import`,不抢资源)
+2. 同 Claude 进程内**多 cwd × 多分支**隔离矩阵(其它都是单 cwd)
+3. monorepo 子项目分支识别
+4. 显式 LRU 30d×3 + 60d 防误删 + 软删 `_trash/`
+5. 失败兜底 ctx 闭环

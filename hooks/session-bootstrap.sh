@@ -72,12 +72,36 @@ if [ $need_bootstrap -eq 1 ]; then
       cp "$HOME/.claude/INDEX_TEMPLATE.md" "$mem_root/INDEX.md"
     fi
 
-    if [ ! -e "$mem_root/MEMORY.md" ] && [ -f "$mem_root/INDEX.md" ]; then
-      (cd "$mem_root" && ln -s INDEX.md MEMORY.md)
-    fi
-
     echo "✓ memory skeleton bootstrapped" >&2
   } 2>/dev/null
+fi
+
+# ─── 智能 MEMORY.md 协作:跟 Claude Code Auto Memory 共存(v2.1.59+)───
+# 状态机(每次 bootstrap 都判断,跟踪 Auto Memory 状态变化):
+#   a) MEMORY.md 不存在        → 软链 MEMORY.md → INDEX.md(我们当入口)
+#   b) MEMORY.md 是软链(我们建的) → 不动
+#   c) MEMORY.md 是真文件(Auto Memory 写的) → 末尾追加 @INDEX.md 幂等
+#
+# 关键:不抢 Anthropic 的 MEMORY.md 资源。Auto Memory 当主,我们当 extension。
+if [ -f "$mem_root/INDEX.md" ]; then
+  memo="$mem_root/MEMORY.md"
+  if [ ! -e "$memo" ]; then
+    # a) 不存在 → 软链
+    (cd "$mem_root" && ln -s INDEX.md MEMORY.md)
+    echo "✓ MEMORY.md → INDEX.md (Memex 当入口,无 Auto Memory)" >&2
+  elif [ -L "$memo" ]; then
+    : # b) 软链 → 不动
+  else
+    # c) 真文件(Auto Memory 写的)→ 追加 @INDEX.md 幂等
+    if ! grep -qE '^@(\./)?INDEX\.md$|Memex extension' "$memo" 2>/dev/null; then
+      {
+        echo ""
+        echo "<!-- Memex extension —— 由 ~/.claude/hooks/session-bootstrap.sh 自动追加 -->"
+        echo "@INDEX.md"
+      } >> "$memo"
+      echo "✓ MEMORY.md 已有 Auto Memory 内容,末尾追加 @INDEX.md 引入 Memex 结构" >&2
+    fi
+  fi
 fi
 
 # ─── ② rebuild_index(扫已有 .md 入索引,LRU 字段保留)───

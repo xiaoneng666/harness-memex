@@ -28,6 +28,55 @@
 | **Hooks(脚本)** | 确定性事件(commit/push 拦截 / 索引同步 / last_access 维护 / bootstrap)| 解析复杂 shell / 判断"是否要写 memory" / 选 compaction 内容 |
 | **LLM(Claude)** | 动态决策(写什么、怎么压缩、是否切分支、是否更新)| 维护索引、处理保护分支拦截、记录 last_access |
 
+### 切分支 handoff 时序(PostToolUse + 并行 Write/Read)
+
+```
+用户:"切到 feat/Y"
+  ↓
+LLM 发 Bash:cd subdir && git checkout feat/Y
+  ↓
+PreToolUse(只拦保护分支提交,checkout 放行)
+  ↓
+Bash 执行 → 切完成 → 在 feat/Y
+  ↓
+PostToolUse → post-checkout-handoff.sh
+  - git rev-parse @{-1} 拿 from = feat/X
+  - git rev-parse HEAD  拿 to   = feat/Y
+  - 塞 ctx:"立刻并行 Write a + Read b"
+  ↓
+LLM 同回合发 2 个 tool call(无依赖,并行):
+  Write feat_X.md  +  Read feat_Y.md
+  ↓
+进入 feat/Y 工作面,前后 context 完整
+```
+
+**修正**(v0.2):之前 PreToolUse 塞"先写再切"弄反了(工具未执行,a 未"封档")。现 PostToolUse 切完塞 ctx。
+
+### 跟 Auto Memory 协作时序
+
+```
+session 启动
+  ↓
+SessionStart → session-start-lru.sh
+  跑 lru_compact --quiet,有候选塞 ctx
+  ↓
+LLM 发第一个工具
+  ↓
+PreToolUse * → session-bootstrap.sh
+  ├─ 检测 mem_root → 不存在则建骨架
+  ├─ 检测漂移 → 自动 rebuild_index
+  └─ 智能 MEMORY.md 协作:
+      ├─ 不存在 → 软链 MEMORY.md → INDEX.md
+      ├─ 是软链(我们的)→ 不动
+      └─ 是真文件(Auto Memory)→ 末尾追加 @INDEX.md(幂等)
+  ↓
+Auto Memory 加载 MEMORY.md(含 @INDEX.md import)
+  ↓
+LLM 拥有 Auto Memory 内容 + Memex 结构
+```
+
+详见 [AUTO-MEMORY-INTEGRATION.md](./AUTO-MEMORY-INTEGRATION.md)。
+
 这个划分是从 **Linux kernel 的 mechanism vs policy** 借来的:
 - 内核(机制层)提供工具:进程调度、内存分配、IO
 - 用户空间(策略层)决定:什么时候调度谁、内存怎么分

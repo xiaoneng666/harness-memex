@@ -119,73 +119,8 @@ case "$cmd_n" in
     exit 0
     ;;
 
-  # ─── git checkout / switch ─── 不拦,做收档+启档
-  *"git checkout "*|*"git switch "*)
-    git_dir=$(resolve_git_dir "$cmd")
-    cur=$(git -C "$git_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
-    [ -z "$cur" ] && exit 0  # 不在 git 仓库
-
-    trimmed="${cmd_n#"${cmd_n%%[![:space:]]*}"}"
-    case "$trimmed" in
-      "cd "*)
-        trimmed=$(printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+[^[:space:];&]+[[:space:]]*(&&|;)[[:space:]]*//')
-        ;;
-    esac
-
-    target=""
-    case "$trimmed" in
-      "git checkout "*|"git switch "*)
-        first_cmd=$(printf '%s' "$trimmed" | sed -E 's/[[:space:]]*(&&|;|\|).*$//')
-        target=$(printf '%s' "$first_cmd" \
-          | sed -E 's/^git (checkout|switch)[[:space:]]+//' \
-          | tr ' ' '\n' \
-          | grep -vE '^-' \
-          | grep -vE '^$' \
-          | head -1)
-        ;;
-      *) exit 0 ;;
-    esac
-
-    # 目标参数像文件路径 → 不是切分支,放行
-    if printf '%s' "$target" | grep -qE '^\./|\.[a-zA-Z][a-zA-Z0-9]{0,5}$'; then
-      exit 0
-    fi
-    if [ -z "$target" ]; then
-      case "$trimmed" in
-        "git checkout "*|"git switch "*)
-          ctx="⚠️ 检测到 git checkout/switch 但 hook 没识别 target 分支(可能复杂 cmd 格式)。
-当前分支: ${cur}。按 ~/.claude/MEMORY_SPEC.md § 四+九 自决策:
-1) 切换前是否要追加本次改动进 ${cur} 的 memory(若有)
-2) 自己看 target 是什么,有无对应 memory 可 Read"
-          jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
-          ;;
-      esac
-      exit 0
-    fi
-    [ "$target" = "$cur" ] && exit 0
-
-    # 收档当前 + 启档目标
-    ctx="🔄 切分支 ${cur} → ${target}"
-
-    cur_mem=$(lookup_branch_memory "$cur")
-    if [ -n "$cur_mem" ]; then
-      ctx="$ctx\n\n【收档 · 当前分支 ${cur}】memory: ${cur_mem}\n切换前请把本次会话以来的关键改动/状态/思路/进度补进该文件(只记主要的)。"
-    else
-      if ! is_protected "$cur"; then
-        ctx="$ctx\n\n【收档 · 当前分支 ${cur}】⚠️ 无 memory 文件,若是重要分支建议先建一份(只记主要的)。"
-      fi
-    fi
-
-    tgt_mem=$(lookup_branch_memory "$target")
-    if [ -n "$tgt_mem" ]; then
-      tgt_content=$(cat "$tgt_mem" 2>/dev/null | head -200)
-      ctx="$ctx\n\n【启档 · 目标分支 ${target}】memory: ${tgt_mem}\n\n--- 内容(前 200 行)---\n${tgt_content}"
-    else
-      ctx="$ctx\n\n【启档 · 目标分支 ${target}】暂无 memory 文件;若是已有工作的分支,切完后读读 INDEX.md。"
-    fi
-
-    jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
-    exit 0
-    ;;
+  # git checkout / switch 移到 hooks/post-checkout-handoff.sh(PostToolUse Bash)
+  # 原因:PreToolUse 时工具未执行,a 分支会话尚未"封档",ctx 太早不准。
+  # PostToolUse 时已切完,from/to 明确,LLM 可并行 Write a + Read b。
 esac
 exit 0

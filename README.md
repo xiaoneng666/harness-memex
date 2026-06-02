@@ -5,8 +5,11 @@
 [![Bash + Python](https://img.shields.io/badge/Bash%20%2B%20Python-Lightweight-success.svg)]()
 [![Status: v0.1](https://img.shields.io/badge/Status-v0.1-orange.svg)]()
 
-> **Persistent memory + harness for Claude Code**
-> 致敬 Vannevar Bush 1945 年 *As We May Think* 提出的 Memex(memory extender)概念
+> **Branch-aware extension pack for Claude Code Auto Memory**
+> 致敬 Vannevar Bush 1945 *Memex* 概念
+
+> **不替代** Anthropic Auto Memory(v2.1.59+ 已经做了 80%)。
+> **补 4 件 Auto Memory 不做的事**:① 分支级 memory ② JSONL schema 索引 ③ 显式 LRU + 软删 ④ 保护分支守卫 + monorepo 子项目识别。
 
 把一次性的 Claude Code 会话,变成**跨会话、跨分支、跨 cwd 持续累积**的长期工作面。
 
@@ -14,9 +17,11 @@
 
 ---
 
-## 🌟 杀手锏特性 — 同一 Claude 进程,N × M 工作面隔离矩阵
+## 🌟 核心场景 — 同一 Claude 对话进程内,多项目 × 多分支并行开发
 
-**这是 Claude Code 自带 `CLAUDE.md` / `/resume` / 4.x auto-memory 都做不到的:**
+**Anthropic Auto Memory 明文写**(文档原话):*"All worktrees and subdirectories of a project share the same memory directory."* → **Auto Memory 不切分支**。
+
+Memex 补这块:
 
 ```
 你启动 1 个 Claude 进程,里面可以:
@@ -32,9 +37,11 @@
                     └─ feat/0601/onboarding
 ```
 
-同一 Claude 对话进程里,你 bash `cd <subdir> && git checkout <branch>` 自由切换 — **每次切换 hook 自动加载/卸载对应 mem_root,Claude 永远在"正确的工作面里"**,从不串记忆。
+同一 Claude 对话进程里,你 bash `cd <subdir> && git checkout <branch>` 自由切换 — **每次切换 hook 自动加载/卸载对应 mem_root,Claude 永远在"正确的工作面里"**。
 
-这背后是:
+`Auto Memory` 是 cwd 级一份 memory;Memex 在它之上补 **cwd × 分支** 二维矩阵。
+
+实现:
 - `~/.claude/projects/<cwd-slug>/memory/` **每 cwd 独立 mem_root**
 - `_index/by_branch.jsonl` **每分支倒排索引**
 - `check-protected-branch.sh` 切分支时**收档当前 + 启档目标 + 注入目标 memory 前 200 行进 ctx**
@@ -60,8 +67,9 @@
 
 如果你重度使用 Claude Code,这些场景一定遇到过:
 
-### 痛点 1 — 上下文失忆
-每次新会话,都要把项目背景、架构决策、踩过的坑**重新讲一遍**。Claude 没有跨 session 的长期记忆。
+### 痛点 1 — 跨分支记忆缺失
+Claude Code Auto Memory 是 cwd 级一份 memory,**所有 worktree / 子目录共享**(文档明写)。
+切了 `feat/X` 分支,memory 还是 cwd 通用那份,不知道你在哪个分支。
 
 ### 痛点 2 — 分支切换断档
 昨天在 `feat/0531/X` 做到一半,今天切 `bugfix/0601/Y` 修 bug,回来 `feat/0531/X` 时,你**忘了上次写到哪、为什么这么写、还差什么没做**。
@@ -75,8 +83,8 @@
 ### 痛点 5 — Monorepo 混乱
 顶层 cwd 一个,下面 N 个 git 子项目。各项目分支名重复(都叫 `feat/0531/x`)。memory 串。
 
-### 痛点 6 — Context 爆炸
-长开发周期跨数十个 session,memory 累积到上百条。**有用的几条沉在大海里**。
+### 痛点 6 — 老 memory 不淘汰
+Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键决策跟过期 TODO 没区分。
 
 ---
 
@@ -107,15 +115,17 @@
         └──────────────────────────────┘
 ```
 
-### 5 个 Hook 干什么(都是 event listener)
+### 7 个 Hook 干什么(都是 event listener)
 
 | Hook | 触发 | 作用 |
 |---|---|---|
-| `session-bootstrap.sh` | 任何工具首次调用 | 新 cwd 自动建骨架 / 检测索引漂移自动 reindex |
-| `pre-read-memory-bump.sh` | Read | 更新 last_access(防 LRU 误杀读多写少的纪律) |
-| `check-protected-branch.sh` | Bash | commit/push 到保护分支拦截;切分支收档+启档 |
-| `pre-edit-branch-notice.sh` | Edit/Write | 编辑前提醒本分支 memory |
-| `post-write-memory-sync.sh` | Write/Edit | memory 文件改后自动入索引 |
+| `session-bootstrap.sh` | PreToolUse * | 新 cwd 自动建骨架 / 漂移自动 reindex / **跟 Auto Memory 协作**(@import 注入) |
+| `pre-read-memory-bump.sh` | PreToolUse Read | 更新 last_access(防 LRU 误杀 read-heavy)|
+| `check-protected-branch.sh` | PreToolUse Bash | commit/push 到保护分支拦截 |
+| `pre-edit-branch-notice.sh` | PreToolUse Edit/Write | 编辑前提醒本分支 memory |
+| **`post-checkout-handoff.sh`** | PostToolUse Bash | 切分支完成后,塞 ctx 让 LLM **并行 Write a + Read b** |
+| `post-write-memory-sync.sh` | PostToolUse Write/Edit | memory 文件改后自动入索引 |
+| **`session-start-lru.sh`** | SessionStart | 主动跑 LRU 扫,有候选塞 ctx 让 LLM 决定压缩 |
 
 ### 3 个 Python CLI 工具
 
@@ -123,7 +133,7 @@
 |---|---|
 | `rebuild_index.py` | 全量重建 JSONL 索引(LRU 字段保留) |
 | `update_index_md.py` | 从索引自动重写 INDEX.md 标记区块 |
-| `lru_compact.py` | LRU 周扫 + 分支删除检测 + `--mark`/`--pin`/`--unpin` |
+| `lru_compact.py` | LRU 周扫 + 分支删除检测 + `--mark`/`--pin`/`--unpin`/**`--rm`**(三层安全闸门 + 软删 `_trash/`)|
 
 ### 关键设计决策
 
@@ -133,6 +143,8 @@
 - **30d × 3 次压缩** — 90 天到候选删除,再 30d 真删,共 120 天保护期
 - **失败兜底 ctx 闭环** — 脚本解析失败 → 塞 ⚠️ ctx 让 LLM 接管,**never silent fail**
 - **静态归脚本动态归 LLM** — hook 只支持最简两种 shell 形式,复杂命令一律降级给 LLM
+- **不抢 Auto Memory 资源** — bootstrap 检测 MEMORY.md 状态:不存在 → 软链;Auto Memory 写的 → 末尾追加 `@INDEX.md` 幂等。详见 [AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md)
+- **PostToolUse 切分支 handoff** — Bash 执行完(已切完)塞 ctx,LLM 并行 `Write a-memory` + `Read b-memory`(同回合 2 个 tool call)
 
 详见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
@@ -150,7 +162,9 @@
 │   ├── pre-read-memory-bump.sh
 │   ├── check-protected-branch.sh
 │   ├── pre-edit-branch-notice.sh
-│   └── post-write-memory-sync.sh
+│   ├── post-checkout-handoff.sh        ← PostToolUse 切分支 handoff
+│   ├── post-write-memory-sync.sh
+│   └── session-start-lru.sh            ← SessionStart 主动 LRU 扫
 └── bin/
     ├── rebuild_index.py
     ├── update_index_md.py

@@ -1,7 +1,10 @@
 # Memex
 
-> **Persistent memory + harness for Claude Code**
-> Named after Vannevar Bush's 1945 *Memex* — a memory extender for the mind.
+> **Branch-aware extension pack for Claude Code Auto Memory**
+> Named after Vannevar Bush's 1945 *Memex* concept.
+
+> **Does not replace** Anthropic Auto Memory (built-in since v2.1.59+, covers ~80%).
+> **Adds 4 things Auto Memory does not do**: ① per-branch memory ② JSONL schema index ③ explicit LRU + soft-delete ④ protected-branch guard + monorepo subproject support.
 
 Turn one-shot Claude Code sessions into a **cross-session, cross-branch, cross-cwd long-term workspace** that accumulates over time.
 
