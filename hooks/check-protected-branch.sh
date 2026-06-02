@@ -38,11 +38,11 @@ resolve_git_dir() {
   local trimmed="${c#"${c%%[![:space:]]*}"}"
   case "$trimmed" in
     "git -C "*)
-      printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/'
+      printf '%s' "$trimmed" | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*$/\1/' | head -1
       return
       ;;
     "cd "*)
-      printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/'
+      printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1
       return
       ;;
   esac
