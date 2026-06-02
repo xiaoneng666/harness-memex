@@ -54,8 +54,24 @@ touch "$marker" 2>/dev/null
 if is_protected "$branch"; then
   ctx="⚠️ 正在保护分支 [${branch}] 上编辑文件 — 改动一般不该直接落主干,确认是否该先切 feat/bugfix 分支。"
 else
-  cwd_slug=$(pwd | sed 's#/#-#g')
-  mem_root="$HOME/.claude/projects/${cwd_slug}/memory"
+  # 上溯找 mem_root(spec § 九 A 方案,支持 monorepo workspace)
+  find_mem_root() {
+    local cwd="$1"
+    while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
+      local s
+      s=$(printf '%s' "$cwd" | sed 's#/#-#g')
+      local mr="$HOME/.claude/projects/${s}/memory"
+      if [ -f "$mr/_index/by_branch.jsonl" ]; then
+        echo "$mr"
+        return 0
+      fi
+      cwd=$(dirname "$cwd")
+    done
+    local s
+    s=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
+    echo "$HOME/.claude/projects/${s}/memory"
+  }
+  mem_root=$(find_mem_root "$(pwd)")
   memfile=""
   if [ -d "$mem_root" ]; then
     idx="$mem_root/_index/by_branch.jsonl"

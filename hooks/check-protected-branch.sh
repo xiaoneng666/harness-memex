@@ -58,12 +58,32 @@ resolve_git_dir() {
   echo "$p"
 }
 
-# ─── 只查当前 cwd 对应的 mem_root(防跨 cwd 同名分支串,见 spec § 九)───
+# ─── 上溯找 mem_root(spec § 九 A 方案):当前 cwd mem_root 不存在或无 by_branch.jsonl 时
+# 沿 parent 递归查,直到找到含 _index/by_branch.jsonl 的最近 mem_root。
+# 支持 monorepo workspace 模式:主 cwd 启动 Claude + 子项目里 cd 跑命令。
+find_mem_root() {
+  local cwd="$1"
+  while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
+    local slug
+    slug=$(printf '%s' "$cwd" | sed 's#/#-#g')
+    local mr="$HOME/.claude/projects/${slug}/memory"
+    if [ -f "$mr/_index/by_branch.jsonl" ]; then
+      echo "$mr"
+      return 0
+    fi
+    cwd=$(dirname "$cwd")
+  done
+  # 全程找不到 → fallback 当前 cwd(可能 mem_root 不存在,caller 自己处理)
+  local slug
+  slug=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
+  echo "$HOME/.claude/projects/${slug}/memory"
+}
+
+# ─── 查分支 memory:在上溯找到的 mem_root 里查 ───
 lookup_branch_memory() {
   local branch="$1"
-  local cwd_slug
-  cwd_slug=$(pwd | sed 's#/#-#g')
-  local mem_root="$HOME/.claude/projects/${cwd_slug}/memory"
+  local mem_root
+  mem_root=$(find_mem_root "$(pwd)")
   [ -d "$mem_root" ] || return 0
 
   local idx="$mem_root/_index/by_branch.jsonl"

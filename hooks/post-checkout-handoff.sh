@@ -77,12 +77,29 @@ fi
 # 同分支(可能是 git checkout 文件不是分支)→ 静默
 [ -n "$from_branch" ] && [ "$from_branch" = "$to_branch" ] && exit 0
 
+# ─── 上溯找 mem_root(spec § 九 A 方案,支持 monorepo workspace)───
+find_mem_root() {
+  local cwd="$1"
+  while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
+    local slug
+    slug=$(printf '%s' "$cwd" | sed 's#/#-#g')
+    local mr="$HOME/.claude/projects/${slug}/memory"
+    if [ -f "$mr/_index/by_branch.jsonl" ]; then
+      echo "$mr"
+      return 0
+    fi
+    cwd=$(dirname "$cwd")
+  done
+  local slug
+  slug=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
+  echo "$HOME/.claude/projects/${slug}/memory"
+}
+
 # 查 from/to 的 memory 路径
 lookup_branch_memory() {
   local branch="$1"
-  local cwd_slug
-  cwd_slug=$(pwd | sed 's#/#-#g')
-  local mem_root="$HOME/.claude/projects/${cwd_slug}/memory"
+  local mem_root
+  mem_root=$(find_mem_root "$(pwd)")
   [ -d "$mem_root" ] || return 0
   local idx="$mem_root/_index/by_branch.jsonl"
   if [ -f "$idx" ]; then
@@ -102,9 +119,8 @@ lookup_branch_memory() {
 # 推荐的 a-memory 写入路径(若不存在,LLM 按这个模板建)
 suggest_branch_memory_path() {
   local branch="$1"
-  local cwd_slug
-  cwd_slug=$(pwd | sed 's#/#-#g')
-  local mem_root="$HOME/.claude/projects/${cwd_slug}/memory"
+  local mem_root
+  mem_root=$(find_mem_root "$(pwd)")
   local slug
   slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
   echo "$mem_root/projects/<biz>/branches/${slug}.md"
