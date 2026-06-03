@@ -119,4 +119,4 @@ mv ~/.claude/hooks ~/.claude/hooks.disabled
 
 ---
 
-没找到答案?[开 issue](https://github.com/<your>/harness-memex/issues) 或贡献到 FAQ。
+没找到答案?[开 issue](https://github.com/xiaoneng666/harness-memex/issues) 或贡献到 FAQ。
