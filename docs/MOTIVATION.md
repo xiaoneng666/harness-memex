@@ -240,7 +240,7 @@ hook 解析失败 → 塞 ⚠️ ctx → LLM 接管:
 ## Part 4 — 不能干啥(诚实边界)
 
 - ❌ **不解析复杂 shell**(pushd / subshell / 引号路径 / 别名)— 故意如此,LLM 兜底
-- ❌ **不自动跑 LRU 周扫**(手动 `lru_compact.py`,未来 P2 加自动)
+- ✅ ~~**不自动跑 LRU 周扫**~~ → v0.2 起 `session-start-lru.sh` 在 SessionStart 自动跑(有候选时塞 ctx 让 LLM 决定压缩)
 - ❌ **不替代 git** — memory 只是个人长期记忆,不入版本控制
 - ❌ **不减少 token 成本** — ctx 注入会增加 token(但减少"重新解释"消耗的 token 远超它)
 - ❌ **不支持 Cursor / Aider 等** — 当前实现绑 Claude Code hook API;未来可移植

@@ -308,7 +308,7 @@ LLM 逐个 Read → 写紧凑版 → lru_compact.py --mark <path> 1 更新 decay
 ## ❓ 不能干啥(已知边界)
 
 - ❌ 不解析复杂 shell(pushd / subshell / 引号路径 / 别名)— **故意如此**,脚本失败时 LLM 兜底
-- ❌ 不自动跑 LRU 周扫(手动 `lru_compact.py`,未来 P2 加自动)
+- ✅ ~~不自动跑 LRU 周扫~~ → v0.2 起 `session-start-lru.sh` 在 SessionStart 自动跑,有候选塞 ctx 让 LLM 决定压缩
 - ❌ 不替代 git 仓库 — memory 只是你的"个人长期记忆",不入版本控制
 - ❌ 不解决 token 成本 — 长 ctx 注入会增加 token
 

@@ -270,7 +270,7 @@ LLM Reads each → writes compact version → lru_compact.py --mark <path> 1
 ## ❓ What it doesn't do (by design)
 
 - ❌ Doesn't parse complex shell (pushd / subshell / quoted paths / aliases) — **intentional**; LLM takes over on failure
-- ❌ Doesn't run LRU scan automatically (manual `lru_compact.py`; future P2)
+- ✅ ~~Doesn't run LRU scan automatically~~ → as of v0.2, `session-start-lru.sh` runs LRU at SessionStart; if candidates exist, ctx prompts LLM to compact
 - ❌ Doesn't replace git — memory is your personal long-term notes, not versioned
 - ❌ Doesn't reduce token cost — ctx injection adds tokens
 
