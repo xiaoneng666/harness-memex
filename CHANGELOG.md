@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — recipes
+
+- `examples/feedback-companion-repo-branches.md` — new feedback recipe: when writing branch memory, explicitly list companion repos' branches involved in this iteration. Surfaces cross-repo coupling from any single repo's branch memory. Pairs with the existing `branch-naming-consistency` (same branch name across repos) and `report-repos-after-each-change` (report touched repos) disciplines to close the cross-repo dev loop.
+
 ## v0.2.2 (2026-06-03) — 按需查询取代全量 @import
 
 ### Why

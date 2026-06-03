@@ -5,6 +5,7 @@
 | 文件 | 类型 | 演示什么 |
 |---|---|---|
 | [feedback-example.md](./feedback-example.md) | feedback | 用户硬性纪律的写法(Why + How to apply + 反例)|
+| [feedback-companion-repo-branches.md](./feedback-companion-repo-branches.md) | feedback | **跨仓库联动**纪律:分支 memory 必须列出本次迭代里配合开发的其他仓库分支,让全貌一眼可见 |
 | [reference-example.md](./reference-example.md) | reference | 外部系统引用(地址 + 用法 + 边界)|
 | [branch-memory-example.md](./branch-memory-example.md) | branch | 分支独立工作面(进度 + 决策 + 踩坑 + 链接)|
 
