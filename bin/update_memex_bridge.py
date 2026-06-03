@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-update_memex_bridge.py — Memex v0.2.1 桥 + catalog 更新
+update_memex_bridge.py — Memex v0.2.3 桥 + catalog 更新
 
 主模式(默认):
   · 扫 cwd 子目录(深度 ≤ 4)所有 .git
@@ -194,7 +194,7 @@ def build_bridge_block(memex: Path, keys: list[str]) -> str:
     ~/.claude/CLAUDE.md(survive compact),具体内容按需用 memex_query.py 查。
     """
     lines = [BRIDGE_START,
-             "<!-- 由 ~/.claude/hooks/session-bootstrap.sh (Memex v0.2.2) 自动维护 -->",
+             "<!-- 由 ~/.claude/hooks/session-bootstrap.sh (Memex v0.2.3) 自动维护 -->",
              "<!-- Memex catalog 见 ~/.claude/CLAUDE.md(survive /compact)-->",
              "<!-- 按需查询:python3 ~/.claude/bin/memex_query.py [--list | --project KEY | --branch KEY SLUG | --grep TERM | --health] -->"]
     if keys:
@@ -213,7 +213,7 @@ def build_catalog_manifest(memex: Path) -> str:
 
     lines = [
         CATALOG_START,
-        "<!-- 由 ~/.claude/bin/update_memex_bridge.py (Memex v0.2.2) 自动维护 -->",
+        "<!-- 由 ~/.claude/bin/update_memex_bridge.py (Memex v0.2.3) 自动维护 -->",
         "<!-- 永久 opt-out:touch ~/.claude/memex/.no_catalog 或 export MEMEX_NO_CATALOG=1 -->",
         "",
         "# Memex — 按需查询的长期工作面",

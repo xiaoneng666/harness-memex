@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-memex_query.py — Memex v0.2.2 按需查询 CLI
+memex_query.py — Memex v0.2.3 按需查询 CLI
 
 LLM 通过 Bash 主动调,**按需查询按需注入** — 取代 v0.2.1 把整个 INDEX
 全量 @import 进 ctx 的做法,大幅降低基线 ctx 占用。
