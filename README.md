@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/for-Claude%20Code-7B61FF.svg)](https://docs.claude.com/en/docs/claude-code)
 [![Bash + Python](https://img.shields.io/badge/Bash%20%2B%20Python-Lightweight-success.svg)]()
-[![Status: v0.2.1](https://img.shields.io/badge/Status-v0.2.1-blue.svg)]()
+[![Status: v0.2.2](https://img.shields.io/badge/Status-v0.2.2-blue.svg)]()
 
 > **Branch-aware extension pack for Claude Code Auto Memory**
 > 致敬 Vannevar Bush 1945 *Memex* 概念
@@ -45,7 +45,8 @@ Memex 补这块:
 - `post-checkout-handoff.sh` 切分支时**ctx 同回合并行 Read project INDEX + Read to-branch memory + Write from-branch memory**(项目共享层 + 分支层一次拉齐)
 - `pre-edit-branch-notice.sh` 编辑前**derive_project_key + ctx 含 project INDEX + 本分支 memory**
 - bootstrap 在 Claude `MEMORY.md` 末尾幂等注入 `<!-- memex:bridge -->` 块(@import cwd-发现 + recently-active 项目),**不抢 Auto Memory 写权**
-- bootstrap 在 `~/.claude/CLAUDE.md` 末尾幂等维护 `<!-- memex:catalog -->` 块(@import 全局 INDEX)→ **任何 cwd 启动都能看到所有项目目录**(v0.2.1;永久 opt-out:`touch ~/.claude/memex/.no_catalog`)
+- bootstrap 在 `~/.claude/CLAUDE.md` 末尾幂等维护 `<!-- memex:catalog -->` 块。**v0.2.2 改成极简 manifest(~2KB)取代 @import 全 INDEX**,内容 = 项目目录 + 查询 CLI 用法。任何 cwd 启动都能看到所有项目目录,survive `/compact`(永久 opt-out:`touch ~/.claude/memex/.no_catalog`)
+- **按需查询入口(v0.2.2)**:LLM 通过 `python3 ~/.claude/bin/memex_query.py [--list | --project KEY | --branch KEY SLUG | --grep TERM | --health]` 主动拉具体内容,不再预载 INDEX 进 ctx
 - hook 触发后异步 `--touch project_key` bump last_access → **碰过的 project 30d 内任何 session 自动 @import**(v0.2.1)
 
 ---
@@ -131,12 +132,13 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
 | `post-write-memory-sync.sh` | PostToolUse Write/Edit | memory 文件改后自动入索引 |
 | **`session-start-lru.sh`** | SessionStart | 主动跑 LRU 扫,有候选塞 ctx 让 LLM 决定压缩 |
 
-### 6 个 Python CLI 工具
+### 7 个 Python CLI 工具
 
 | 工具 | 作用 |
 |---|---|
 | `derive_project_key.py` | git remote 归一化 + sha1[:12] → project_key(单一身份来源) |
-| `update_memex_bridge.py` | 扫 cwd 子目录所有 git repo,在 Claude `MEMORY.md` 末尾幂等替换 bridge 区块 |
+| `update_memex_bridge.py` | 扫 cwd 子目录所有 git repo;在 `~/.claude/CLAUDE.md` 维护 catalog manifest;`MEMORY.md` 维护指示性 bridge |
+| **`memex_query.py`**(v0.2.2 新增)| LLM 按需查询入口:`--list` / `--project KEY` / `--branch KEY SLUG` / `--feedback` / `--reference` / `--grep TERM` / `--recent` / `--health` |
 | `rebuild_index.py` | 全量重建 3 个 JSONL 索引(LRU 字段保留) |
 | `update_index_md.py` | 从索引自动重写 global + 每 project 的 INDEX.md 标记区块 |
 | `lru_compact.py` | LRU 周扫 + 分支死亡检测 + `--mark`/`--pin`/`--unpin`/**`--rm`**(三层安全闸门 + 软删 `_trash/`)|

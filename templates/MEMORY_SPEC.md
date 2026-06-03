@@ -283,11 +283,19 @@ metadata:
    - `global/INDEX.md`(永远)
    - cwd-discovered 有内容的 project(v0.2 行为)
    - `projects.jsonl.last_access < MEMEX_RECENT_DAYS`(默认 30d)且有内容的 project(v0.2.1 新增)— **任何 cwd 启动都能看到最近碰过的项目**
-7. 在 `~/.claude/CLAUDE.md` 末尾幂等维护 `<!-- memex:catalog -->` 区块,内容 `@~/.claude/memex/global/INDEX.md`(v0.2.1)
+7. 在 `~/.claude/CLAUDE.md` 末尾幂等维护 `<!-- memex:catalog -->` 区块,内容**极简 manifest**(v0.2.2,~2KB):
+   - 项目目录(key + display + origin + branch_count)
+   - `memex_query.py` 7 子命令用法
+   - 写新 memory 的路径约定
+   - **不再 @import 全 INDEX**(v0.2.1 行为已 deprecate — 旧做法在 35 active 项目时占 ~30KB ctx 且违反 spec § 七「索引非内容,按需注入」)
    - 永久 opt-out 两种(任一即跳过):
      - `touch ~/.claude/memex/.no_catalog`(sentinel,持久)
      - `export MEMEX_NO_CATALOG=1`(shell env)
    - 文件不存在 → 创建最小 stub
+8. `MEMORY.md` 的 `<!-- memex:bridge -->` 区块降级为**指示性注释**(v0.2.2,~400 字节):
+   - 4 行注释告诉 LLM「catalog 在 CLAUDE.md;查询用 `memex_query.py`」
+   - **不再 @import 任何 INDEX**(v0.2.1 的「@global INDEX + @每个 project INDEX」已 deprecate)
+   - 避免 MEMORY.md 在 `/compact` 后丢 bridge 的脆弱依赖
 
 ## 七.A、触发式 ctx 与 lazy bridge(v0.2.1)
 

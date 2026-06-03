@@ -189,12 +189,76 @@ def upsert_projects_jsonl(memex: Path, infos: list[dict]) -> int:
 
 
 def build_bridge_block(memex: Path, keys: list[str]) -> str:
+    """v0.2.2 起 bridge 块降级为指示性注释 — 不再 @import 全 INDEX(避免 ctx 爆 +
+    /compact 后 MEMORY.md bridge 可能丢失的脆弱依赖)。真正的 catalog 在
+    ~/.claude/CLAUDE.md(survive compact),具体内容按需用 memex_query.py 查。
+    """
     lines = [BRIDGE_START,
-             "<!-- 由 ~/.claude/hooks/session-bootstrap.sh (Memex v0.2) 自动维护,勿手改 -->",
-             f"@{memex}/global/INDEX.md"]
-    for k in keys:
-        lines.append(f"@{memex}/projects/{k}/INDEX.md")
+             "<!-- 由 ~/.claude/hooks/session-bootstrap.sh (Memex v0.2.2) 自动维护 -->",
+             "<!-- Memex catalog 见 ~/.claude/CLAUDE.md(survive /compact)-->",
+             "<!-- 按需查询:python3 ~/.claude/bin/memex_query.py [--list | --project KEY | --branch KEY SLUG | --grep TERM | --health] -->"]
+    if keys:
+        lines.append(f"<!-- 本 cwd 检测到 {len(keys)} 个 active project,完整目录见 CLAUDE.md catalog -->")
     lines.append(BRIDGE_END)
+    return "\n".join(lines) + "\n"
+
+
+def build_catalog_manifest(memex: Path) -> str:
+    """v0.2.2 catalog 极简 manifest — 直接写入项目目录(不 @import 全 INDEX),
+    占用 ~2KB,LLM 一眼能看到所有项目 + 怎么按需查具体内容。
+    """
+    projects = load_jsonl(memex / "_index/projects.jsonl")
+    active = [p for p in projects if has_content(memex, p["key"])]
+    active.sort(key=lambda p: p.get("last_access", ""), reverse=True)
+
+    lines = [
+        CATALOG_START,
+        "<!-- 由 ~/.claude/bin/update_memex_bridge.py (Memex v0.2.2) 自动维护 -->",
+        "<!-- 永久 opt-out:touch ~/.claude/memex/.no_catalog 或 export MEMEX_NO_CATALOG=1 -->",
+        "",
+        "# Memex — 按需查询的长期工作面",
+        "",
+        f"已知 active project 共 **{len(active)}** 个(有内容、最近 30d 内被访问)。**不预载内容,按需查**。",
+        "",
+        "## 查询入口(LLM 主动用 Bash 调)",
+        "",
+        "- `python3 ~/.claude/bin/memex_query.py --list` — 列所有 active project",
+        "- `python3 ~/.claude/bin/memex_query.py --project <key>` — 看 project 元数据 / 分支 / feedback / reference",
+        "- `python3 ~/.claude/bin/memex_query.py --branch <key> <slug>` — 拿分支 memory 路径",
+        "- `python3 ~/.claude/bin/memex_query.py --feedback [--project-filter KEY] [--term TERM]` — 列 feedback",
+        "- `python3 ~/.claude/bin/memex_query.py --reference [--project-filter KEY] [--term TERM]` — 列 reference",
+        "- `python3 ~/.claude/bin/memex_query.py --grep <term>` — 跨索引模糊查",
+        "- `python3 ~/.claude/bin/memex_query.py --recent [--days N]` — 最近 access 过的",
+        "",
+        "## 项目目录(按 last_access 降序)",
+        "",
+    ]
+    if not active:
+        lines.append("_(暂无 active project — 一旦碰过某 git repo + 写第一条 memory,即会出现在这里)_")
+    else:
+        lines.append("| key | display | origin | branches |")
+        lines.append("|---|---|---|---|")
+        for p in active:
+            origin = p.get("origin") or "(none)"
+            if len(origin) > 50:
+                origin = origin[:48] + "…"
+            lines.append(
+                f"| `{p['key']}` | {p.get('display_name', '?')} "
+                f"| `{origin}` | {p.get('branch_count', 0)} |"
+            )
+    lines.append("")
+    lines.append("## 切分支 / 编辑时")
+    lines.append("")
+    lines.append("post-checkout-handoff / pre-edit-branch-notice hook 会自动塞具体 memory 路径进 ctx,不用查。")
+    lines.append("")
+    lines.append("## 写新 memory 时")
+    lines.append("")
+    lines.append("- 跨项目纪律 → `~/.claude/memex/global/feedback/<slug>.md`")
+    lines.append("- 项目专属纪律 → `~/.claude/memex/projects/<key>/feedback/<slug>.md`")
+    lines.append("- 分支记忆 → `~/.claude/memex/projects/<key>/branches/<branch_slug>.md`")
+    lines.append("- 写完 post-write-memory-sync hook 自动入索引")
+    lines.append("")
+    lines.append(CATALOG_END)
     return "\n".join(lines) + "\n"
 
 
@@ -334,13 +398,8 @@ def ensure_catalog_in_claude_md(memex: Path) -> str:
     if sentinel.exists():
         return "skipped"
 
-    catalog = "\n".join([
-        CATALOG_START,
-        "<!-- 由 ~/.claude/bin/update_memex_bridge.py (Memex v0.2.1) 自动维护 -->",
-        "<!-- 永久 opt-out:touch ~/.claude/memex/.no_catalog 或 export MEMEX_NO_CATALOG=1 -->",
-        f"@{memex}/global/INDEX.md",
-        CATALOG_END,
-    ]) + "\n"
+    # v0.2.2:catalog 从「@import 全 INDEX」改成「极简 manifest」直接写入
+    catalog = build_catalog_manifest(memex)
 
     if not USER_CLAUDE_MD.exists():
         USER_CLAUDE_MD.parent.mkdir(parents=True, exist_ok=True)

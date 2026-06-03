@@ -86,7 +86,11 @@ if [ -n "$memfile" ]; then
   [ -f "$project_index" ] && ctx="$ctx
   · ${project_index}(项目共享层:overview / feedback / reference)"
   ctx="$ctx
-  · ${memfile}(本分支 memory:进度 / 决策 / 踩坑)"
+  · ${memfile}(本分支 memory:进度 / 决策 / 踩坑)
+
+想看更多?按需查:
+  · python3 ~/.claude/bin/memex_query.py --project ${project_key}
+  · python3 ~/.claude/bin/memex_query.py --feedback --project-filter ${project_key}"
 else
   suggested="$MEMEX/projects/$project_key/branches/${slug}.md"
   ctx="开改核实 · ${display} · 当前分支: ${branch}
@@ -96,6 +100,9 @@ else
   [ -f "$project_index" ] && ctx="$ctx
   · ${project_index}"
   ctx="$ctx
+
+想看更多?按需查:
+  · python3 ~/.claude/bin/memex_query.py --project ${project_key}
 
 按 spec § 五 自决策:长期分支建议立档,临时分支可跳。"
 fi

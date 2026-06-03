@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.2.2 (2026-06-03) — 按需查询取代全量 @import
+
+### Why
+
+v0.2.1 用 `~/.claude/CLAUDE.md` catalog 块 `@import` 全局 INDEX,bridge 块 `@import` 每个 active project 的 INDEX — 35 个 active project 时 ctx 占用 ~30KB。两个问题:
+
+1. **强依赖 Claude 原生 memory**:MEMORY.md bridge 在 `/compact` 后可能丢(MEMORY.md 不在 CC 原生 re-inject 名单)
+2. **预载内容而非索引**:违反 spec § 七「索引非内容,按需注入」原则 — INDEX.md 被 Claude Code 全文展开进 ctx
+
+### What changed
+
+**New CLI: `bin/memex_query.py`** — 7 个子命令,LLM 按需用 Bash 主动查:
+
+```
+--list                       # 列所有 active project
+--project <key>              # 看 project 元数据 + 分支 + feedback + reference
+--branch <key> <slug>        # 拿分支 memory 路径
+--feedback [--project-filter KEY] [--term TERM]
+--reference [--project-filter KEY] [--term TERM]
+--grep <term>                # 跨索引模糊查
+--recent [--days N]          # 最近 access 过的
+--health                     # 索引完整性自检
+```
+
+支持 `--json` 给脚本管道用。失败 exit 非 0 + stderr,LLM 看得到。
+
+**Catalog → 极简 manifest(不再 @import)**:
+
+`~/.claude/CLAUDE.md` 的 catalog 块从「@import global INDEX」改成直接写入项目目录:
+- 项目列表(key + display + origin + branch_count)
+- 7 个 query CLI 用法
+- 写新 memory 的路径约定
+
+实际尺寸:**~2KB**(对比 v0.2.1 的 ~7KB+ + 各 project INDEX 全展开)。
+
+**Bridge 降级为指示性注释**:
+
+`MEMORY.md` 的 bridge 块不再 @import,只剩 4 行注释告诉 LLM「catalog 在 CLAUDE.md,查询用 memex_query.py」。**~400 字节**。
+
+**Hook ctx 加 query 教学**:
+
+`post-checkout-handoff.sh` / `pre-edit-branch-notice.sh` ctx 末尾加一段「想看更多 → `memex_query.py --project KEY` / `--feedback --project-filter KEY` / `--grep TERM`」。LLM 在触发时既得到具体路径(push),也学会按需查询(pull)。
+
+### 体现的原则
+
+| 原则 | v0.2.1 | v0.2.2 |
+|---|---|---|
+| **索引非内容,按需注入** | catalog @import 全 INDEX 进 ctx | catalog 内联极简 manifest,内容靠 query CLI 按需拉 |
+| **不强依赖 Claude 原生 memory** | bridge 在 MEMORY.md /compact 后丢 | catalog 在 CLAUDE.md(survive compact);bridge 仅指示性 |
+| **脚本塞事实,LLM 决策** | hook ctx 给路径 | hook ctx 给路径 + 教 LLM 用 query CLI 按需拉 |
+| **失败兜底闭环** | 不变 | memex_query.py 失败 exit 非 0 + stderr |
+
+### 升级
+
+`./install.sh` 重跑会复制新的 `bin/memex_query.py`,下次 session bootstrap 自动重写 catalog 成 manifest 格式。无需手动迁移。
+
+旧的 `@import` 链不删也无害(`@global/INDEX.md` 还在),但新机制下基线 ctx 降到 ~2KB。
+
+---
+
 ## v0.2.1 (2026-06-03) — 项目共享层彻底解耦 cwd
 
 把 v0.2 还残留的「project 共享层(INDEX / overview / 项目 feedback / reference)只在 cwd subtree 扫到时自动加载」缺口填上。

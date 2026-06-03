@@ -167,7 +167,12 @@ fi
 
 ctx="$ctx
 
-(三步互不依赖,**同回合并行发**最高效 — 把项目共享层 + 分支层一次拉齐)"
+(三步互不依赖,**同回合并行发**最高效 — 把项目共享层 + 分支层一次拉齐)
+
+想看更多?按需查:
+  · python3 ~/.claude/bin/memex_query.py --project ${project_key}
+  · python3 ~/.claude/bin/memex_query.py --feedback --project-filter ${project_key}
+  · python3 ~/.claude/bin/memex_query.py --grep <term>"
 
 # 后台 touch:更新 projects.jsonl.last_access,让下次 session bootstrap 把本 project 加进 bridge
 BRIDGE_PY="$HOME/.claude/bin/update_memex_bridge.py"

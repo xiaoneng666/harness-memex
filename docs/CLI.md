@@ -1,15 +1,50 @@
-# CLI 工具用法(v0.2)
+# CLI 工具用法(v0.2.2)
 
-6 个 Python 工具,装到 `~/.claude/bin/`。可以独立调用,也由 hook 自动调用。
+7 个 Python 工具,装到 `~/.claude/bin/`。
 
 | 工具 | 一句话 |
 |---|---|
 | `derive_project_key.py` | git remote 归一化 + sha1[:12] → project_key,所有 hook 调它 |
-| `update_memex_bridge.py` | 扫 cwd 子目录所有 git repo,在 Claude `MEMORY.md` 末尾幂等替换 bridge 块 |
+| `update_memex_bridge.py` | 扫 cwd 子目录 git repo;维护 CLAUDE.md catalog manifest + MEMORY.md 指示性 bridge |
+| **`memex_query.py`** | **LLM 按需查询入口**(v0.2.2 新增) |
 | `rebuild_index.py` | 全量重建 3 个 jsonl 索引 |
 | `update_index_md.py` | 从索引重写 INDEX.md 标记区块 |
 | `lru_compact.py` | LRU 周扫 + 分支死亡检测 + decay/pin/rm 管理 |
 | `migrate_v01_to_v02.py` | 从 v0.1 一次性迁移到 v0.2(YAML mapping 驱动) |
+
+## 0. memex_query.py(v0.2.2)— LLM 按需查询入口
+
+**作用**:取代 v0.2.1 把 INDEX 全量 @import 进 ctx 的做法。LLM 通过 Bash 主动调,按需拉具体内容。
+
+```bash
+# 列所有 active project(简洁清单)
+python3 ~/.claude/bin/memex_query.py --list
+
+# 看某 project 的元数据 + 分支 + feedback + reference
+python3 ~/.claude/bin/memex_query.py --project <key>
+
+# 拿某分支 memory 路径(找不到 → exit 1)
+python3 ~/.claude/bin/memex_query.py --branch <key> <branch_slug>
+
+# 列 feedback(可加 --project-filter / --term 过滤)
+python3 ~/.claude/bin/memex_query.py --feedback
+python3 ~/.claude/bin/memex_query.py --feedback --project-filter <key> --term redis
+
+# 跨索引 grep
+python3 ~/.claude/bin/memex_query.py --grep <term>
+
+# 最近 N 天 access 过的
+python3 ~/.claude/bin/memex_query.py --recent --days 7
+
+# 索引完整性自检
+python3 ~/.claude/bin/memex_query.py --health
+```
+
+**格式**:默认 markdown(给 LLM 直接读);`--json` 给脚本管道用。
+
+**失败兜底**:未知 key/branch → stderr 错误 + exit 1。memex 根不存在 → exit 2。
+
+---
 
 ---
 
