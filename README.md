@@ -239,7 +239,7 @@ Claude Code 原生(我们不动):
 ### 安装
 
 ```bash
-git clone https://github.com/<your-fork>/harness-memex.git
+git clone https://github.com/xiaoneng666/harness-memex.git
 cd harness-memex
 ./install.sh
 ```

@@ -119,4 +119,4 @@ export MEMEX_PROTECTED_BRANCHES="main master production"
 1. 提供:`hostname` / `claude --version` / `jq --version` / `python3 --version` / OS
 2. 复现步骤
 3. hook stderr 输出
-4. 提 [issue](https://github.com/<your-fork>/harness-memex/issues)
+4. 提 [issue](https://github.com/xiaoneng666/harness-memex/issues)
