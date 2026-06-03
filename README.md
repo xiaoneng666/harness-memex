@@ -61,7 +61,7 @@ Memex 补这块:
 | memory 越多越难找 | JSONL 索引 O(1) 查,jq 一行命中 |
 | 长开发期 context bloat | 30d × 3 次自动压缩,关键决策永久保留 |
 | 多项目同名分支串记忆 | project-key(git origin)隔离,worktree / monorepo / 多 cwd 都正确 |
-| 一次需求跨 2~9 仓,单仓 memory 看不到全貌(漏拉/漏部署)| `feedback-companion-repo-branches` recipe:分支 memory 强制列「配合开发的其他仓库分支」,任一仓切入都见全貌 |
+| 一次需求跨 2~9 仓,单仓 memory 看不到全貌(漏拉/漏部署)| `feedback-companion-repo-branches` **recipe(opt-in)**:adopt 后 LLM 自动在分支 memory 加「配合开发的其他仓库分支」段,任一仓切入都见全貌 |
 
 ---
 
@@ -90,6 +90,8 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
 
 ### 痛点 7 — 跨仓库联动开发丢全貌
 一次业务需求经常跨 2~9 个仓(如 service-a RPC + bff-x 透传 + service-b 拦截)。**只看单仓分支 memory 不知道还动了哪些其他仓的哪些分支** → 容易漏拉、漏合 develop、漏部署。Memex 推荐 [`feedback-companion-repo-branches`](./examples/feedback-companion-repo-branches.md) recipe 强制在分支 memory 列「配合开发的其他仓库分支」(仓 + 分支 + < 20 字关系 + `[[memory]]` 双向链接),任一仓切入都能立刻看到全貌,跟 `branch-naming-consistency` + `report-repos-after-each-change` 三件套形成闭环。
+
+> **注意**:此 recipe 是 **opt-in**,装完 install.sh 不自动启用。**怎么 adopt** 见下方 [推荐 recipes 段](#-推荐的-feedback-recipes纪律模式--opt-in)的「怎么启用某条 recipe」。
 
 ---
 
@@ -164,14 +166,50 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
 
 ---
 
-## 📋 推荐的 feedback recipes(纪律模式)
+## 📋 推荐的 feedback recipes(纪律模式 — **opt-in**)
 
-Memex 自带几个**通用纪律模式**,既是用户写 feedback 时可直接抄的样板,也是把 spec § 五「signal-only」具体化到日常场景的参考:
+> ⚠️ **Recipes 不是 code feature,装完 install.sh 不会自动启用** — 这些 markdown 文档只是放在 `examples/` 下供用户**主动 adopt**(尊重「不污染用户私人 feedback 池」原则)。LLM 只有看到这些规则进了用户自己的 `~/.claude/memex/global/feedback/`,才会在写 memory 时遵守。
+
+Memex 自带几个**通用纪律模式**,把 spec § 五「signal-only」具体化到日常场景:
 
 | Recipe | 解什么 |
 |---|---|
 | [`examples/feedback-example.md`](./examples/feedback-example.md) | 单仓的 Why + How to apply + 反例 三段式模板 |
 | [`examples/feedback-companion-repo-branches.md`](./examples/feedback-companion-repo-branches.md) | **跨仓库联动闭环**:写分支 memory 必须列「配合开发的其他仓库分支」(仓 + 分支 + 关系 < 20 字 + `[[memory]]`)。新会话切到任一仓都能立刻看到全貌,**避免漏拉 / 漏部署**。配合 `branch-naming-consistency`(跨仓同名)+ `report-repos-after-each-change`(改后报仓)三件套形成跨仓开发闭环 |
+
+### 怎么启用某条 recipe(2 选 1)
+
+**方式 A — 手动 copy(最直接)**
+
+```bash
+# 装完 install.sh 后,在 clone 的目录里跑:
+cp examples/feedback-companion-repo-branches.md \
+   ~/.claude/memex/global/feedback/companion-repo-branches.md
+
+# post-write-memory-sync hook 自动 reindex 进 meta.jsonl
+# 下次 session bootstrap 重写 catalog 时,这条会出现在 LLM ctx 里
+# 从此 LLM 写分支 memory 时会自动遵守(加「## 配合开发的其他仓库分支」段)
+```
+
+**方式 B — 让 Claude 帮你写**
+
+新 session 里说:
+> "看 `~/Downloads/harness-memex/examples/feedback-companion-repo-branches.md`,把这条规则写进我的 global feedback。"
+
+Claude 用 Write tool 写到 `~/.claude/memex/global/feedback/`,post-write hook 自动入索引。下次 session LLM 自己看到。
+
+### 验证启用成功
+
+```bash
+python3 ~/.claude/bin/memex_query.py --feedback --term companion
+# 应看到 companion-repo-branches 出现在 feedback 列表
+```
+
+确认在列表里后,LLM 在写**任何分支 memory** 时,都会自动加「## 配合开发的其他仓库分支」段。
+
+### 不想要某条 recipe?
+
+不 adopt 即可(默认就是)。已 adopt 想撤,删 `~/.claude/memex/global/feedback/<slug>.md`,下次 session 自动从 catalog 摘掉。
 
 ---
 
@@ -254,14 +292,28 @@ cd harness-memex
 
 **最后重启 Claude Code**(让 hook 生效)。
 
+### (可选)第 4 步 — adopt 推荐 recipes
+
+`install.sh` 只装 code feature,**不动用户的 feedback 池**。如想启用 [推荐的 feedback recipes](#-推荐的-feedback-recipes纪律模式--opt-in),在 clone 目录里:
+
+```bash
+# 例:启用「跨仓库联动闭环」纪律
+cp examples/feedback-companion-repo-branches.md \
+   ~/.claude/memex/global/feedback/companion-repo-branches.md
+```
+
+或新 session 里让 Claude 帮你抄(详见上面 [recipes 段](#-推荐的-feedback-recipes纪律模式--opt-in))。
+
 ### 验证装好了
 
 新开会话,任意 cwd 跑一个 bash 让 bootstrap 触发,然后:
-```
-ls ~/.claude/memex/                        # 全局池根
+```bash
+ls ~/.claude/memex/                        # 全局池根:_index/  global/  projects/
 cat ~/.claude/memex/_index/projects.jsonl  # 当前识别到的 projects
+python3 ~/.claude/bin/memex_query.py --health  # 索引完整性自检
+python3 ~/.claude/bin/memex_query.py --feedback # 看已 adopt 的 recipes
 ```
-若看到 `_index/  global/  projects/` 三层 + projects.jsonl 含 cwd 下 git repo,就好了。
+若看到三层目录 + projects.jsonl 含 cwd 下 git repo,就好了。
 
 ---
 
