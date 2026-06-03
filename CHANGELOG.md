@@ -1,8 +1,30 @@
 # Changelog
 
-## Unreleased — recipes
+## v0.2.3 (2026-06-03) — cross-repo coupling recipe
 
-- `examples/feedback-companion-repo-branches.md` — new feedback recipe: when writing branch memory, explicitly list companion repos' branches involved in this iteration. Surfaces cross-repo coupling from any single repo's branch memory. Pairs with the existing `branch-naming-consistency` (same branch name across repos) and `report-repos-after-each-change` (report touched repos) disciplines to close the cross-repo dev loop.
+新增一个**跨仓库联动闭环**的 feedback recipe — 解决"一次需求跨 2~9 仓,只看单仓分支 memory 丢全貌"的实际痛点。
+
+### New
+
+- `examples/feedback-companion-repo-branches.md` — when writing branch memory, the recipe requires a `## 配合开发的其他仓库分支` section listing companion repos involved in this iteration:
+  ```
+  | 仓库 | 分支 | 关系 | memory |
+  |---|---|---|---|
+  | <repo> | <branch> | <短标签 < 20 字> | [[对方 memory slug]] |
+  ```
+  Relation column uses short tags (e.g. `联动 RPC` / `BFF 透传` / `前后端契约` / `数据迁移配合` / `同期独立`), never restates the other side's responsibilities (jump to the linked memory for details). Bidirectional linking required — both repos register the relation so any single entry surfaces the full picture.
+
+### Why
+
+- One business need often touches 2~9 repos. Reading a single repo's branch memory misses the cross-repo picture → easy to miss "also pull X" / "also merge to develop" / "also deploy".
+- Pairs with existing disciplines `branch-naming-consistency` (same branch name across repos) and `report-repos-after-each-change` (report touched repos after each change) to close the cross-repo dev loop.
+- 5 rules: write the section even when single-repo (mark `_(none)_`); sync the table when companion list changes; allow dangling `[[...]]` links; keep relation < 20 chars; require bidirectional registration.
+
+### README
+
+Added a "推荐的 feedback recipes" section in README listing this recipe alongside the existing `feedback-example.md` (single-repo template).
+
+---
 
 ## v0.2.2 (2026-06-03) — 按需查询取代全量 @import
 

@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/for-Claude%20Code-7B61FF.svg)](https://docs.claude.com/en/docs/claude-code)
 [![Bash + Python](https://img.shields.io/badge/Bash%20%2B%20Python-Lightweight-success.svg)]()
-[![Status: v0.2.2](https://img.shields.io/badge/Status-v0.2.2-blue.svg)]()
+[![Status: v0.2.3](https://img.shields.io/badge/Status-v0.2.3-blue.svg)]()
 
 > **Branch-aware extension pack for Claude Code Auto Memory**
 > 致敬 Vannevar Bush 1945 *Memex* 概念
@@ -157,6 +157,17 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
 - **绕过 [issue #39920](https://github.com/anthropics/claude-code/issues/39920)** — Claude Code 用 `git-common-dir` 派生 slug 在 worktree 下有 bug;memex 直接用 git origin 派生 project-key,worktree 天然走通
 
 详见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+
+---
+
+## 📋 推荐的 feedback recipes(纪律模式)
+
+Memex 自带几个**通用纪律模式**,既是用户写 feedback 时可直接抄的样板,也是把 spec § 五「signal-only」具体化到日常场景的参考:
+
+| Recipe | 解什么 |
+|---|---|
+| [`examples/feedback-example.md`](./examples/feedback-example.md) | 单仓的 Why + How to apply + 反例 三段式模板 |
+| [`examples/feedback-companion-repo-branches.md`](./examples/feedback-companion-repo-branches.md) | **跨仓库联动闭环**:写分支 memory 必须列「配合开发的其他仓库分支」(仓 + 分支 + 关系 < 20 字 + `[[memory]]`)。新会话切到任一仓都能立刻看到全貌,**避免漏拉 / 漏部署**。配合 `branch-naming-consistency`(跨仓同名)+ `report-repos-after-each-change`(改后报仓)三件套形成跨仓开发闭环 |
 
 ---
 
