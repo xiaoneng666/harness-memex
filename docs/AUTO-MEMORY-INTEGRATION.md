@@ -17,47 +17,53 @@
 
 [Anthropic 文档原话](https://code.claude.com/docs/en/memory):
 
-> "All worktrees and subdirectories of a project share the same memory directory."
+> "Per repository, shared across worktrees" (Auto Memory 是 **per-repo,worktree 共享**)
 
-意思:**Auto Memory 是 cwd 级,不切分支**。这是文档明写的设计选择,不是 bug。
+但 [issue #39920](https://github.com/anthropics/claude-code/issues/39920):Auto Memory 用 `git-common-dir` 派生 slug,**worktree 实际上全部映射到主 worktree**,且**不切分支**。
 
 Memex 补这 4 件:
 
 | # | Auto Memory 不做 | Memex 怎么补 |
 |---|---|---|
 | 1 | 分支级 memory 切换 | `post-checkout-handoff.sh` PostToolUse 检测切完成,塞 ctx 让 LLM 并行 Write a + Read b |
-| 2 | 结构化 schema(JSONL 索引 / decay 字段) | `_index/meta.jsonl` + `by_branch.jsonl` 倒排,jq O(1) 查 |
+| 2 | 结构化 schema(JSONL 索引 / decay 字段) | `_index/{projects,branches,meta}.jsonl` 三重倒排,jq O(1) 查 |
 | 3 | 显式 LRU 30d × 3 次压缩 + pinned + 软删 | `lru_compact.py` + `session-start-lru.sh` 主动触发 |
-| 4 | 保护分支提交守卫 + monorepo 子项目分支识别 | `check-protected-branch.sh` 拦 commit/push + `cd <subdir>` / `git -C <subdir>` 解析 |
+| 4 | worktree / monorepo / 多 cwd 启动一致 | 按 `git remote get-url origin` 归一化 + sha1[:12] 派生 **project-key**,绕过 git-common-dir bug |
 
 ## 协作机制(关键!)
 
-bootstrap hook 每次跑都判断 `MEMORY.md` 状态,**不抢 Anthropic 的资源**:
+bootstrap hook 在 Claude Code per-cwd `MEMORY.md` 末尾**幂等追加** `<!-- memex:bridge -->` 区块,**不抢 Anthropic 写权**:
 
 ```
-状态机:
-  a) MEMORY.md 不存在        → 软链 MEMORY.md → INDEX.md(Memex 当入口)
-  b) MEMORY.md 是软链(我们建的) → 不动
-  c) MEMORY.md 是真文件(Auto Memory 写的) → 末尾追加 @INDEX.md(幂等)
+状态机(对 ~/.claude/projects/<cc-slug>/memory/MEMORY.md):
+  a) 文件不存在       → 新建,内容 = bridge 块
+  b) 文件存在但无 bridge → 末尾追加 bridge 块
+  c) 文件存在含 bridge   → 正则替换 bridge 块(幂等)
 ```
 
-**c 的具体效果**:
+**bridge 块的内容**:
 
 ```markdown
-# MEMORY.md(Auto Memory 写的原内容)
+# MEMORY.md 内 Auto Memory 写的原内容(我们不动)
 用户偏好 Go 1.21
 项目用 PostgreSQL
 ... ...
 
-<!-- Memex extension —— 由 ~/.claude/hooks/session-bootstrap.sh 自动追加 -->
-@INDEX.md
+<!-- memex:bridge:start -->
+<!-- 由 ~/.claude/hooks/session-bootstrap.sh (Memex v0.2) 自动维护,勿手改 -->
+@~/.claude/memex/global/INDEX.md
+@~/.claude/memex/projects/<key-A>/INDEX.md
+@~/.claude/memex/projects/<key-B>/INDEX.md
+<!-- memex:bridge:end -->
 ```
 
-`@INDEX.md` 是 Claude Code 原生的 `@import` 语法 — Auto Memory 加载 MEMORY.md 时会自动递归拉 INDEX.md(以及 INDEX.md 里 `@` 的其它文件)进 user message。
+`@<path>` 是 Claude Code 原生的 `@import` 语法 — Auto Memory 加载 MEMORY.md 时会自动递归拉对应 INDEX.md(最多 4 hops)进 user message。
+
+**bridge 块只 @import "有内容"的 project**(`projects/<key>/` 下除 INDEX.md 外有 .md),避免数十个空 stub 塞 ctx。
 
 **所以**:
-- Auto Memory 写 MEMORY.md → 自动 + 我们结构 → 全部进 Claude 上下文
-- 我们的 INDEX.md / feedback / reference / branch memory 通过 `@import` 被 Auto Memory 拉进上下文
+- Auto Memory 写 MEMORY.md → 我们的 bridge 块 + Auto Memory 内容 → 全部进 Claude 上下文
+- 我们的 global + per-project INDEX.md 通过 `@import` 被 Auto Memory 拉进上下文
 - **零冲突 / 零抢资源 / 零侵入**
 
 ## 用户场景
@@ -65,25 +71,24 @@ bootstrap hook 每次跑都判断 `MEMORY.md` 状态,**不抢 Anthropic 的资�
 ### 场景 A:你之前没用过 Auto Memory
 
 - bootstrap 第一次跑,`MEMORY.md` 不存在
-- 软链 MEMORY.md → INDEX.md
-- Memex 当主入口
+- 新建 `MEMORY.md`,内容只含 `<!-- memex:bridge -->` 块
+- Auto Memory 启用时自己写入,内容会追加在 bridge 之前
 
-### 场景 B:你之前一直用 Auto Memory(开了一阵子)
+### 场景 B:你之前一直用 Auto Memory
 
 - bootstrap 跑,`MEMORY.md` 是 Auto Memory 写的真文件
-- 末尾追加 `@INDEX.md`
+- 末尾幂等追加 `<!-- memex:bridge -->` 块
 - Auto Memory 继续管它,Memex 通过 `@import` 把结构注入
 
 ### 场景 C:你之前关了 Auto Memory(`autoMemoryEnabled: false`)
 
-- 跟场景 A 一样,Memex 当主入口
+- 跟场景 A 一样,但 MEMORY.md 永远只有 bridge 块
 
-### 场景 D:你之前用 Memex,**后来又开 Auto Memory**
+### 场景 D:cwd 子目录有新 git repo 加入
 
-- Auto Memory 启动后自动写入 MEMORY.md(覆盖我们的软链)
-- 下次 Claude session 启动,bootstrap 检测到 MEMORY.md 不再是软链了
-- **自动转入场景 B 模式**:追加 `@INDEX.md`
-- 无缝切换,不丢东西
+- bootstrap 检测到新 project_key → 建 `projects/<key>/INDEX.md` 骨架
+- bridge 块下次 session 加这一行 `@.../projects/<key>/INDEX.md`(若该 project 已有内容)
+- 完全无感
 
 ## 配置建议
 
@@ -96,13 +101,13 @@ bootstrap hook 每次跑都判断 `MEMORY.md` 状态,**不抢 Anthropic 的资�
 ## 检验自己装得对不对
 
 ```bash
-# 1. 看 MEMORY.md 内容
-cat ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/MEMORY.md
+# 1. 看 MEMORY.md 末尾有 bridge 块
+sed -n '/memex:bridge:start/,/memex:bridge:end/p' \
+  ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/MEMORY.md
 
-# 期望两种之一:
-# 场景 A/C:是软链 → INDEX.md
-# 场景 B/D:Auto Memory 内容 + 末尾 @INDEX.md
+# 2. 看 memex 全局池骨架在
+ls ~/.claude/memex/_index/  # 应有 projects.jsonl branches.jsonl meta.jsonl
 
-# 2. 看 hook 注册
+# 3. 看 hook 注册
 jq '.hooks.PreToolUse[].hooks[].command | select(test("memex|memory"))' ~/.claude/settings.json
 ```

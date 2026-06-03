@@ -1,25 +1,25 @@
 #!/bin/bash
-# pre-read-memory-bump.sh — PreToolUse(Read) hook
+# pre-read-memory-bump.sh — PreToolUse(Read)  (Memex v0.2)
 #
-# 每次 LLM Read memory/**/*.md 时,更新 _index/meta.jsonl 那一行的 last_access。
-# 让 LRU 决策反映访问热度(对 read-heavy 的 feedback/reference 至关重要 —
-# 否则 mtime 不动会被误判为僵尸,详见 MEMORY_SPEC.md § 三)。
-#
-# tmpfile + mv 原子;jq 流式过滤,只改命中行;失败永远 exit 0 不阻断 Read。
+# 每次 Read ~/.claude/memex/**/*.md 时更新 _index/meta.jsonl 的 last_access。
+# 让 LRU 反映访问热度(read-heavy 的 feedback/reference 不被误杀)。
 
 input=$(cat)
 fpath=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
 
+# 只对 memex 池起作用
 case "$fpath" in
-  *"/.claude/projects/"*"/memory/"*".md") : ;;
+  "$HOME/.claude/memex/"*.md) : ;;
   *) exit 0 ;;
 esac
+# 跳 _index/INDEX.md 本身
+case "$fpath" in
+  */_index/*|*/INDEX.md) exit 0 ;;
+esac
 
-# 反推 memory 根目录 + 相对路径
-mem_root="${fpath%/memory/*}/memory"
-rel="${fpath#${mem_root}/}"
-
-idx="$mem_root/_index/meta.jsonl"
+MEMEX="$HOME/.claude/memex"
+rel="${fpath#$MEMEX/}"
+idx="$MEMEX/_index/meta.jsonl"
 [ -f "$idx" ] || exit 0
 
 now=$(date -u +%FT%TZ)

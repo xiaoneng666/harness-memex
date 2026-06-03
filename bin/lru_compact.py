@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-# lru_compact.py — LRU 周扫工具(MEMORY_SPEC.md § 三)
+# lru_compact.py — Memex v0.2 LRU 周扫工具(MEMORY_SPEC.md § 四)
 #
 # 设计:
 #   30d 周期 × 3 次压缩 + 候选删除,共 4 阶段。
-#   工具只标候选 + 列清单,**压缩内容由 LLM 写**(见 spec § 三.A)。
-#   分支删除(本地+远程都查不到) → status=dormant 进 LRU(spec § 三.B)。
+#   工具只标候选 + 列清单,**压缩内容由 LLM 写**(见 spec § 四.A)。
+#   分支死亡(本地+远程都查不到)→ status=dormant 进 LRU(spec § 四.B)。
 #
-# 用法:
-#   # 默认扫 cwd 对应 mem_root,列待压缩/候选删除清单
-#   python3 ~/.claude/bin/lru_compact.py [<mem_root>]
-#
-#   # LLM 压缩完一条后,标 decay(单条增量更新 meta.jsonl)
-#   python3 ~/.claude/bin/lru_compact.py --mark <rel_path> <new_decay> [<mem_root>]
-#
-#   # 锁定某条永不淘汰(status=pinned)/ 解锁(回 active)
-#   python3 ~/.claude/bin/lru_compact.py --pin <rel_path> [<mem_root>]
-#   python3 ~/.claude/bin/lru_compact.py --unpin <rel_path> [<mem_root>]
-#
-#   # 检测分支删除(对 type=branch 的 memory 跑 git;查不到 → status=dormant)
-#   python3 ~/.claude/bin/lru_compact.py --detect-deleted-branches <repo_path> [<mem_root>]
+# 用法(v0.2 默认 memex 根):
+#   python3 ~/.claude/bin/lru_compact.py                              # 扫整个 memex
+#   python3 ~/.claude/bin/lru_compact.py --memex <path>               # 指定 memex 根
+#   python3 ~/.claude/bin/lru_compact.py --quiet --memex <path>       # hook 用,kv 输出
+#   python3 ~/.claude/bin/lru_compact.py --mark <rel_path> <new_decay>
+#   python3 ~/.claude/bin/lru_compact.py --pin <rel_path>
+#   python3 ~/.claude/bin/lru_compact.py --unpin <rel_path>
+#   python3 ~/.claude/bin/lru_compact.py --rm <rel_path>
+#   python3 ~/.claude/bin/lru_compact.py --detect-deleted-branches <project_key> <repo_path>
 #
 # 自定义周期:export MEMEX_LRU_PERIOD_DAYS=30
 #
@@ -36,6 +32,7 @@ import subprocess
 from datetime import datetime, timezone, timedelta
 
 PERIOD_DAYS = int(os.environ.get('MEMEX_LRU_PERIOD_DAYS', '30'))
+DEFAULT_MEMEX = os.path.expanduser('~/.claude/memex')
 
 
 def now_utc():
@@ -207,7 +204,10 @@ def cmd_rm(rel_path, mem_root, force=False):
     """
     import shutil
     idx = os.path.join(mem_root, '_index', 'meta.jsonl')
-    by_branch = os.path.join(mem_root, '_index', 'by_branch.jsonl')
+    # v0.2 用 branches.jsonl;留 by_branch.jsonl 兼容回退
+    by_branch = os.path.join(mem_root, '_index', 'branches.jsonl')
+    if not os.path.exists(by_branch):
+        by_branch = os.path.join(mem_root, '_index', 'by_branch.jsonl')
     records = load_meta(idx)
 
     target = None
@@ -263,11 +263,11 @@ def cmd_rm(rel_path, mem_root, force=False):
     records = [r for r in records if r.get('path') != rel_path]
     atomic_write_jsonl(idx, records)
 
-    # by_branch.jsonl 同步
+    # branches.jsonl 同步(v0.2 schema:memory_path 字段)
     if os.path.exists(by_branch):
         with open(by_branch, 'r', encoding='utf-8') as f:
             br = [json.loads(l) for l in f if l.strip()]
-        br = [r for r in br if r.get('memory') != rel_path]
+        br = [r for r in br if r.get('memory_path') != rel_path and r.get('memory') != rel_path]
         atomic_write_jsonl(by_branch, br)
 
     print(f'✓ 从索引移除: {rel_path}')
@@ -313,7 +313,8 @@ def cmd_pin(rel_path, mem_root, unpin=False):
     print(f'✓ {rel_path}: status={target}')
 
 
-def cmd_detect_deleted_branches(repo_path, mem_root):
+def cmd_detect_deleted_branches(project_key, repo_path, mem_root):
+    """v0.2: 按 project_key 对账,而非全 mem_root 扫。"""
     if not os.path.isdir(os.path.join(repo_path, '.git')):
         print(f'❌ {repo_path} 不是 git 仓库根', file=sys.stderr)
         sys.exit(1)
@@ -334,78 +335,95 @@ def cmd_detect_deleted_branches(repo_path, mem_root):
         print(f'❌ git 调用失败: {e}', file=sys.stderr)
         sys.exit(1)
 
-    remote_clean = {b.split('/', 1)[1] if '/' in b else b for b in remote if b}
-    local_set = set(local)
+    # branch_slug:把 / - 变 _,跟 memory 文件名同步
+    def slug(b):
+        return re.sub(r'[/-]', '_', b)
+    remote_clean = {slug(b.split('/', 1)[1]) if '/' in b else slug(b) for b in remote if b}
+    local_set = {slug(b) for b in local if b}
     alive = local_set | remote_clean
 
     changed = 0
     deleted_list = []
     for r in records:
         if r.get('type') != 'branch': continue
-        branch = r.get('branch', '')
-        if not branch: continue
-        if branch in alive: continue
+        if r.get('project_key') != project_key: continue
+        branch_slug = r.get('branch', '')
+        if not branch_slug: continue
+        if branch_slug in alive: continue
         if r.get('status') != 'dormant':
             r['status'] = 'dormant'
             changed += 1
-            deleted_list.append((branch, r['path']))
+            deleted_list.append((branch_slug, r['path']))
 
     if changed:
         atomic_write_jsonl(idx, records)
-        print(f'✓ {changed} 条 branch memory 标 dormant (分支已删):')
+        print(f'✓ {changed} 条 branch memory 标 dormant (分支已删, project={project_key}):')
         for b, p in deleted_list:
             print(f'   · {b}  → {p}')
         print()
         print('这些 memory 现在进 LRU 流程:下次扫 30d+ 未 access 触发压缩。')
     else:
-        print('✓ 所有 branch memory 对应分支仍存活,无需 demote')
+        print(f'✓ project {project_key} 所有 branch memory 对应分支仍存活,无需 demote')
 
 
 def main():
     args = sys.argv[1:]
-    cwd_slug = os.getcwd().replace('/', '-')
-    default_mem_root = os.path.expanduser(f'~/.claude/projects/{cwd_slug}/memory')
+
+    # --memex <path> 全局覆盖,默认 ~/.claude/memex
+    mem_root = DEFAULT_MEMEX
+    new_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == '--memex' and i + 1 < len(args):
+            mem_root = args[i+1]
+            i += 2
+        else:
+            new_args.append(args[i])
+            i += 1
+    args = new_args
 
     if args and args[0] == '--mark':
         if len(args) < 3:
-            print('用法: --mark <rel_path> <new_decay> [<mem_root>]', file=sys.stderr)
+            print('用法: --mark <rel_path> <new_decay> [--memex <path>]', file=sys.stderr)
             sys.exit(1)
-        cmd_mark(args[1], args[2], args[3] if len(args) > 3 else default_mem_root)
+        cmd_mark(args[1], args[2], mem_root)
         return
 
     if args and args[0] in ('--pin', '--unpin'):
         if len(args) < 2:
-            print('用法: --pin <rel_path> [<mem_root>] / --unpin <rel_path> [<mem_root>]', file=sys.stderr)
+            print('用法: --pin <rel_path> / --unpin <rel_path> [--memex <path>]', file=sys.stderr)
             sys.exit(1)
-        cmd_pin(args[1], args[2] if len(args) > 2 else default_mem_root, unpin=(args[0] == '--unpin'))
+        cmd_pin(args[1], mem_root, unpin=(args[0] == '--unpin'))
         return
 
     if args and args[0] == '--quiet':
-        mem_root = args[1] if len(args) > 1 else default_mem_root
         cmd_scan(mem_root, quiet=True)
         return
 
     if args and args[0] == '--rm':
         if len(args) < 2:
-            print('用法: --rm <rel_path> [<mem_root>] [--force]', file=sys.stderr)
+            print('用法: --rm <rel_path> [--force] [--memex <path>]', file=sys.stderr)
             sys.exit(1)
         rel = args[1]
         force = '--force' in args[2:]
-        rest = [a for a in args[2:] if a != '--force']
-        mem_root = rest[0] if rest else default_mem_root
         cmd_rm(rel, mem_root, force=force)
         return
 
     if args and args[0] == '--detect-deleted-branches':
-        if len(args) < 2:
-            print('用法: --detect-deleted-branches <repo_path> [<mem_root>]', file=sys.stderr)
+        if len(args) < 3:
+            print('用法: --detect-deleted-branches <project_key> <repo_path> [--memex <path>]', file=sys.stderr)
             sys.exit(1)
-        cmd_detect_deleted_branches(args[1], args[2] if len(args) > 2 else default_mem_root)
+        cmd_detect_deleted_branches(args[1], args[2], mem_root)
         return
 
-    mem_root = args[0] if args else default_mem_root
+    # 兼容:旧调用 lru_compact.py <path> 传 v0.1 mem_root
+    if args and os.path.isdir(args[0]) and args[0].endswith('memory'):
+        # v0.1 mem_root → 兼容静默扫(不破坏迁移过渡期)
+        cmd_scan(args[0])
+        return
+
     if not os.path.isdir(mem_root):
-        print(f'❌ mem_root 不存在: {mem_root}', file=sys.stderr)
+        print(f'❌ memex 根不存在: {mem_root}', file=sys.stderr)
         sys.exit(1)
     cmd_scan(mem_root)
 

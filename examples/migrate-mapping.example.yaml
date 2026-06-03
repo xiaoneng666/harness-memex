@@ -1,0 +1,29 @@
+# migrate_v01_to_v02 mapping 示例
+#
+# 把你的 v0.1 旧池里 projects/<biz>/ 目录 → v0.2 项目仓库地址。
+# migrate_v01_to_v02.py --mapping <this-file> --apply
+#
+# 三类值:
+#   · "<repo path>"     → 跑 derive_project_key.py 拿 key,文件搬 memex/projects/<key>/
+#   · "__group__"       → 集合层文件,搬 memex/global/<biz>/
+#   · "__group__/<sub>" → 集合子目录,搬 memex/global/<biz>/<sub>/
+#
+# v0.1 旧池路径:~/.claude/projects/<your-cwd-slug>/memory/projects/<biz>/
+
+# ─── 真实仓库映射(例)─────────────────────────────────────────
+biz_to_repo:
+  example-service:               "~/code/example-service"
+  another-service:               "~/code/another-service"
+  frontend-app:                  "~/code/frontend-app"
+
+  # 集合层(描述跨项目系统的文档,无单一 repo 归属)
+  example-system:                "__group__"
+  example-system/planned-svc-a:  "__group__/planned-svc-a"
+  example-system/planned-svc-b:  "__group__/planned-svc-b"
+
+# ─── feedback 全进 global/ 还是按项目拆 ──────────────────────────
+feedback_to_global: true
+
+# ─── reference 项目级覆盖(例:测试凭证仅属某项目)─────────────
+reference_project_overrides:
+  test-env-creds.md: "example-service"

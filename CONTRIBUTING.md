@@ -27,8 +27,9 @@
    - 任何改 jsonl 必须 tmpfile + os.replace(Python)或 tmpfile + mv(Bash)
    - 不允许直接覆盖写
 
-5. **每 cwd 独立 mem_root,hook 不跨 cwd glob**
-   - 防同名分支串(`MEMORY_SPEC.md § 九`)
+5. **按 project-key(git origin)隔离,所有 hook 调 `derive_project_key.py`**
+   - 防同名分支串(`MEMORY_SPEC.md § 十`)
+   - 不要在 hook 里自己 hash origin / 自己解析 git-common-dir,用单一来源工具
 
 ### 哲学(强烈推荐)
 
@@ -52,7 +53,7 @@
 - [ ] 在 `bin/` 加 `<your-tool>.py`
 - [ ] shebang `#!/usr/bin/env python3`
 - [ ] 写 jsonl 用 `tempfile + os.replace` 原子
-- [ ] 默认 mem_root 推断:`cwd_slug = os.getcwd().replace('/', '-')`
+- [ ] 默认 memex 根:`HOME / ".claude/memex"`,加 `--memex <path>` flag 让用户覆盖
 - [ ] 在 `docs/CLI.md` 加用法
 - [ ] 工具帮助文本(`python3 tool.py --help` 或顶部注释)
 
@@ -81,12 +82,15 @@ docs: add troubleshooting for jq path issues
 
 ## 测试
 
+**注意**:macOS bash 可能启了 `xpg_echo`,会把字面 `\n` 解成真换行,破坏 JSON 传给下游。**用 `printf '%s'` 替代 `echo`**:
+
 ```bash
-# 手动测某个 hook
-echo '{"tool_input":{"command":"git checkout feat/X"}}' | bash hooks/check-protected-branch.sh
+# 手动测某个 hook(用 printf 而非 echo)
+printf '%s' '{"tool_input":{"command":"git -C ~/repo checkout feat/X"},"tool_response":{"exitCode":0}}' \
+  | bash hooks/post-checkout-handoff.sh
 
 # 测 Python 工具
-python3 bin/rebuild_index.py /tmp/test-mem-root
+python3 bin/rebuild_index.py --memex /tmp/test-memex
 ```
 
 ## Code of Conduct

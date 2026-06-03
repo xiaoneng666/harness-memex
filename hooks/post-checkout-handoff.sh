@@ -1,38 +1,45 @@
 #!/bin/bash
-# post-checkout-handoff.sh — PostToolUse(Bash) hook
+# post-checkout-handoff.sh — PostToolUse(Bash) hook  (Memex v0.2)
 #
-# 切分支完成后(Bash 工具执行成功之后)触发,塞 ctx 让 LLM 主动并行:
-#   1. Write a-memory(总结刚才在 from 分支的会话改动)
-#   2. Read b-memory(加载 to 分支上下文)
+# 切分支(git checkout / switch)成功后,塞 ctx 让 LLM 并行:
+#   · Write a-memory(收档 from)
+#   · Read  b-memory(启档 to)
 #
-# 用 `@{-1}` 拿 git 内置的"前一个 HEAD"分支名,不依赖 reflog 解析。
+# v0.2 关键变化:不再按 cwd 查找 memory,改按 (project_key, branch) 查
+# ~/.claude/memex/_index/branches.jsonl(O(1) jq filter)。
 #
-# 设计:
-#   · hook 只塞事实(from/to/path),不替 LLM 决策
-#   · PostToolUse 时工具已成功,from/to 已确定
-#   · Write a + Read b 互相无依赖,LLM 可并行发出
+# 流程:
+#   1. 解析 git checkout 命令拿 git working dir
+#   2. git rev-parse 拿 from / to branch
+#   3. git -C <dir> repo_root → derive_project_key.py 拿 project_key
+#   4. jq branches.jsonl 查 (key, from) / (key, to) → memory 文件
+#   5. 塞 ctx
+#
+# hook 只支持 `cd <path>` / `git -C <path>` 两种最简形式(spec § 七)。
 
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null)
 exit_code=$(printf '%s' "$input" | jq -r '.tool_response.exitCode // .tool_response.exit_code // 0' 2>/dev/null)
 
-# Bash 执行失败 → 没切成功 → 不处理
 [ "$exit_code" != "0" ] && exit 0
 
-# 解析 cmd 看是不是 git checkout/switch
+# 是 git checkout/switch 才处理
 cmd_n="$cmd"
 case "$cmd_n" in
   *"git -C "*)
     cmd_n=$(printf '%s' "$cmd_n" | sed -E 's/git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+/git /g')
     ;;
 esac
-
 case "$cmd_n" in
   *"git checkout "*|*"git switch "*) : ;;
   *) exit 0 ;;
 esac
 
-# 从 cmd 解析 git working dir(同 spec § 七 两种最简形式)
+PYTHON3=$(command -v python3 2>/dev/null || echo /usr/bin/python3)
+DERIVE_KEY="$HOME/.claude/bin/derive_project_key.py"
+MEMEX="$HOME/.claude/memex"
+
+# 解析 git working dir(spec § 七 两种最简形式)
 resolve_git_dir() {
   local c="$1"
   local trimmed="${c#"${c%%[![:space:]]*}"}"
@@ -45,12 +52,8 @@ resolve_git_dir() {
       p=$(printf '%s' "$trimmed" | sed -E 's/^cd[[:space:]]+([^[:space:];&]+).*$/\1/' | head -1)
       ;;
     *)
-      echo "."
-      return
-      ;;
+      echo "."; return ;;
   esac
-  # 展开 ~ 为 $HOME(否则 git -C 不识别字面 ~)
-  # 注意:${p#~/} 里的 ~ 会被 bash 展开成 $HOME;必须双引号让它字面
   case "$p" in
     "~/"*) p="${HOME}/${p#"~/"}" ;;
     "~")   p="${HOME}" ;;
@@ -60,109 +63,117 @@ resolve_git_dir() {
 
 git_dir=$(resolve_git_dir "$cmd")
 
-# 现在的分支(to)和前一个 HEAD(from)
+# 拿 from / to
 to_branch=$(git -C "$git_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
 from_branch=$(git -C "$git_dir" rev-parse --abbrev-ref '@{-1}' 2>/dev/null)
 
-# 拿不到分支 → 兜底 ctx,让 LLM 接管
 if [ -z "$to_branch" ]; then
-  ctx="⚠️ git checkout 执行成功,但 hook 没识别 git 仓库(git_dir=${git_dir})。
-按 ~/.claude/MEMORY_SPEC.md § 四+九 自决策:
-1) 自己拿当前分支
-2) 看是否要写前一分支 memory + 读当前分支 memory"
+  ctx="⚠️ git checkout 成功但 hook 没识别 git 仓库(git_dir=${git_dir})。
+按 ~/.claude/MEMORY_SPEC.md § 五+十 自决策:拿当前分支,查 ~/.claude/memex/_index/branches.jsonl 看是否有对应 memory。"
   jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$c}}'
   exit 0
 fi
 
-# 同分支(可能是 git checkout 文件不是分支)→ 静默
+# 同分支 → 静默
 [ -n "$from_branch" ] && [ "$from_branch" = "$to_branch" ] && exit 0
 
-# ─── 上溯找 mem_root(spec § 九 A 方案,支持 monorepo workspace)───
-find_mem_root() {
-  local cwd="$1"
-  while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
-    local slug
-    slug=$(printf '%s' "$cwd" | sed 's#/#-#g')
-    local mr="$HOME/.claude/projects/${slug}/memory"
-    if [ -f "$mr/_index/by_branch.jsonl" ]; then
-      echo "$mr"
-      return 0
-    fi
-    cwd=$(dirname "$cwd")
-  done
-  local slug
-  slug=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
-  echo "$HOME/.claude/projects/${slug}/memory"
+# 拿 project_key
+info=$("$PYTHON3" "$DERIVE_KEY" "$git_dir" 2>/dev/null)
+project_key=$(printf '%s' "$info" | jq -r '.key // ""' 2>/dev/null)
+display=$(printf '%s' "$info" | jq -r '.display_name // ""' 2>/dev/null)
+
+if [ -z "$project_key" ] || [ "$project_key" = "null" ]; then
+  ctx="⚠️ git checkout 成功(${from_branch:-?} → ${to_branch}),但 derive_project_key 失败(git_dir=${git_dir})。
+按 spec § 三 自决策:看是否要建 memory。"
+  jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$c}}'
+  exit 0
+fi
+
+# 工具:从 branch 名转 slug
+slug_branch() {
+  printf '%s' "$1" | sed 's#[/-]#_#g'
 }
 
-# 查 from/to 的 memory 路径
+# 工具:查 branches.jsonl(O(1) jq filter)
 lookup_branch_memory() {
-  local branch="$1"
-  local mem_root
-  mem_root=$(find_mem_root "$(pwd)")
-  [ -d "$mem_root" ] || return 0
-  local idx="$mem_root/_index/by_branch.jsonl"
-  if [ -f "$idx" ]; then
-    local rel
-    rel=$(jq -r --arg b "$branch" 'select(.branch==$b) | .memory' "$idx" 2>/dev/null | head -1)
-    if [ -n "$rel" ] && [ -f "$mem_root/$rel" ]; then
-      echo "$mem_root/$rel"
-      return 0
-    fi
+  local key="$1" branch="$2"
+  local idx="$MEMEX/_index/branches.jsonl"
+  [ -f "$idx" ] || return
+  local slug
+  slug=$(slug_branch "$branch")
+  local rel
+  rel=$(jq -r --arg k "$key" --arg b "$slug" \
+        'select(.project_key==$k and .branch_slug==$b) | .memory_path' \
+        "$idx" 2>/dev/null | head -1)
+  if [ -n "$rel" ] && [ -f "$MEMEX/$rel" ]; then
+    echo "$MEMEX/$rel"
+    return
   fi
-  local slug
-  slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
-  ls "$mem_root"/projects/*/*/branches/"${slug}".md 2>/dev/null | head -1
-  ls "$mem_root"/projects/*/branches/"${slug}".md 2>/dev/null | head -1
+  # fallback glob
+  ls "$MEMEX/projects/$key/branches/${slug}.md" 2>/dev/null | head -1
 }
 
-# 推荐的 a-memory 写入路径(若不存在,LLM 按这个模板建)
+# 建议路径(若 from 没 memory,给出推荐路径)
 suggest_branch_memory_path() {
-  local branch="$1"
-  local mem_root
-  mem_root=$(find_mem_root "$(pwd)")
+  local key="$1" branch="$2"
   local slug
-  slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
-  echo "$mem_root/projects/<biz>/branches/${slug}.md"
+  slug=$(slug_branch "$branch")
+  echo "$MEMEX/projects/$key/branches/${slug}.md"
 }
 
-from_mem=$(lookup_branch_memory "$from_branch")
-to_mem=$(lookup_branch_memory "$to_branch")
+from_mem=$(lookup_branch_memory "$project_key" "$from_branch")
+to_mem=$(lookup_branch_memory "$project_key" "$to_branch")
 
-# 构建 ctx:塞事实 + 给出明确并行指令
-ctx="🔄 切分支完成: ${from_branch:-?} → ${to_branch}
+DEFAULT_PROTECTED="main master develop production staging"
+PROTECTED_BRANCHES="${MEMEX_PROTECTED_BRANCHES:-$DEFAULT_PROTECTED}"
+is_protected() {
+  local b="$1"
+  for p in $PROTECTED_BRANCHES; do
+    [ "$b" = "$p" ] && return 0
+  done
+  return 1
+}
+
+project_index="$MEMEX/projects/$project_key/INDEX.md"
+
+ctx="🔄 切分支完成(${display}): ${from_branch:-?} → ${to_branch}
 
 立刻并行处理(无依赖,可同时发):"
 
-# A. 写 from(收档)
+# A. 读 project INDEX(总是,把项目共享层一次拉齐:overview / 项目 feedback / 项目 reference 都在里面链接)
+if [ -f "$project_index" ]; then
+  ctx="$ctx
+  · Read ${project_index}:加载 ${display} 项目共享层(overview / 长期决策 / 项目专属 feedback / reference)"
+fi
+
+# B. 写 from(收档)
 if [ -n "$from_mem" ]; then
   ctx="$ctx
   · Write ${from_mem}:总结本次会话以来在 ${from_branch} 的关键改动 / 状态 / 思路 / 进度"
-else
-  if [ -n "$from_branch" ]; then
-    case "$from_branch" in
-      main|develop|production|staging) : ;;  # 保护分支不强求建
-      *)
-        suggested=$(suggest_branch_memory_path "$from_branch")
-        ctx="$ctx
-  · Write ${suggested}(自建一份):若 ${from_branch} 有会话改动,frontmatter + 摘要 / 进度;不重要可跳"
-        ;;
-    esac
-  fi
+elif [ -n "$from_branch" ] && ! is_protected "$from_branch"; then
+  suggested=$(suggest_branch_memory_path "$project_key" "$from_branch")
+  ctx="$ctx
+  · Write ${suggested}(自建):若 ${from_branch} 有会话改动,frontmatter + 摘要 / 进度;不重要可跳"
 fi
 
-# B. 读 to(启档)
+# C. 读 to(启档)
 if [ -n "$to_mem" ]; then
   ctx="$ctx
-  · Read ${to_mem}:加载 ${to_branch} 上下文(进度 / 决策 / 踩坑)"
+  · Read ${to_mem}:加载 ${to_branch} 分支记忆(进度 / 决策 / 踩坑)"
 else
   ctx="$ctx
-  · Read ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/INDEX.md:看 ${to_branch} 是否要立档(项目速查段 + by_branch.jsonl 没命中)"
+  · ${to_branch} 分支无 memory(看上面 INDEX 的分支列表确认,再决定是否立档)"
 fi
 
 ctx="$ctx
 
-(两步互不依赖,**同一回合并行发**最高效)"
+(三步互不依赖,**同回合并行发**最高效 — 把项目共享层 + 分支层一次拉齐)"
+
+# 后台 touch:更新 projects.jsonl.last_access,让下次 session bootstrap 把本 project 加进 bridge
+BRIDGE_PY="$HOME/.claude/bin/update_memex_bridge.py"
+if [ -f "$BRIDGE_PY" ]; then
+  "$PYTHON3" "$BRIDGE_PY" --touch "$project_key" --repo "$git_dir" >/dev/null 2>&1 &
+fi
 
 jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext:$c}}'
 exit 0

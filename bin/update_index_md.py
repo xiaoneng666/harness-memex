@@ -1,214 +1,259 @@
 #!/usr/bin/env python3
-# update_index_md.py — 从 meta.jsonl 自动重写 INDEX.md 的 AUTO 标记区块
-#
-# 设计:
-#   · 只重写 INDEX.md 里用 <!-- AUTO:START <name> --> ... <!-- AUTO:END <name> --> 包起来的区块
-#   · 其它内容(目录树、LRU 表、自定义说明)完全保留
-#   · 标记缺失/损坏 → 直接 abort 不写,LLM 排查(harness 不破坏旧)
-#
-# 默认重写 3 个区块:
-#   · project-table  — projects/* 的项目速查表
-#   · feedback-list  — feedback/*.md 的速查链接(用 · 分隔)
-#   · reference-list — reference/*.md 的速查链接
-#
-# 用法:
-#   python3 ~/.claude/bin/update_index_md.py [<mem_root>]
-#
-# harness:
-#   · tempfile + rename 原子写
-#   · 幂等(同输入同输出)
-#   · 缺标记区块 → 直接 raise SystemExit(1) 不写半个
+"""
+update_index_md.py — Memex v0.2 INDEX.md 自动重写
 
+从 _index/{meta,branches,projects}.jsonl 重写:
+  · ~/.claude/memex/global/INDEX.md          顶层全局门面
+  · ~/.claude/memex/projects/<key>/INDEX.md  每项目门面
+
+只重写 <!-- AUTO:START <name> --> ... <!-- AUTO:END <name> --> 标记区块,其余内容保留。
+缺标记区块 → 用对应模板新建。
+
+Usage:
+  update_index_md.py                  # 全跑
+  update_index_md.py --global         # 只跑 global/INDEX.md
+  update_index_md.py --project <key>  # 只跑某 project
+  update_index_md.py --memex <path>   # 指定 memex 根
+"""
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import re
 import sys
-import json
 import tempfile
-from collections import defaultdict, OrderedDict
+from pathlib import Path
+
+HOME = Path.home()
+DEFAULT_MEMEX = HOME / ".claude/memex"
+GLOBAL_TEMPLATE = HOME / ".claude/MEMEX_GLOBAL_INDEX_TEMPLATE.md"
+PROJECT_TEMPLATE = HOME / ".claude/MEMEX_PROJECT_INDEX_TEMPLATE.md"
 
 
-def load_meta(mem_root):
-    idx = os.path.join(mem_root, '_index', 'meta.jsonl')
-    if not os.path.exists(idx):
-        print(f'❌ {idx} 不存在 — 先跑 rebuild_index.py', file=sys.stderr)
-        sys.exit(1)
-    records = []
-    with open(idx, 'r', encoding='utf-8') as f:
+def load_jsonl(p: Path) -> list[dict]:
+    if not p.exists():
+        return []
+    out: list[dict] = []
+    with open(p, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                print(f'❌ meta.jsonl 损坏:{e}', file=sys.stderr)
-                sys.exit(1)
-    return records
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
 
 
-def slug_from_path(rel_path):
-    return os.path.splitext(os.path.basename(rel_path))[0]
-
-
-def short_desc(record, max_chars=80):
-    d = (record.get('description') or '').strip()
+def short_desc(r: dict, max_chars: int = 90) -> str:
+    d = (r.get("description") or "").strip()
     if not d:
-        return record.get('name') or slug_from_path(record['path'])
+        return r.get("name") or Path(r.get("path", "")).stem
     if len(d) > max_chars:
-        d = d[:max_chars].rstrip() + '...'
+        d = d[:max_chars].rstrip() + "..."
     return d
 
 
-def render_project_table(records):
-    """按 (project, sub-service, branches?) 分组。
-
-    分组规则:
-      · projects/<biz>/<file>.md            → 组 "<biz>"
-      · projects/<biz>/<sub>/<file>.md       → 组 "<biz> / <sub>"
-      · projects/<biz>/<sub>/branches/<x>.md → 组 "<biz> / <sub> / branches"
-      · global/*.md                          → 组 "global"
-    """
-    groups = OrderedDict()
-    for r in records:
-        p = r['path']
-        if p.startswith('global/'):
-            key = 'global'
-        elif p.startswith('projects/'):
-            parts = p.split('/')
-            biz = parts[1]
-            if len(parts) == 3:
-                key = biz
-            elif len(parts) == 4:
-                key = f'{biz} / {parts[2]}'
-            elif len(parts) == 5 and parts[3] == 'branches':
-                key = f'{biz} / {parts[2]} / branches'
-            else:
-                key = biz
-        else:
-            continue
-        groups.setdefault(key, []).append(r)
-
-    lines = ['| 项目 | 关键文档 |', '|---|---|']
-    for key, recs in groups.items():
-        def sort_key(r):
-            slug = slug_from_path(r['path'])
-            priority = 0
-            if slug in ('overview', 'iterations_index', 'README'):
-                priority = -2
-            elif slug in ('history',):
-                priority = -1
-            return (priority, slug)
-        recs.sort(key=sort_key)
-
-        items = []
-        for r in recs:
-            slug = slug_from_path(r['path'])
-            if 'branches' in r['path']:
-                display = r.get('branch') or slug.replace('_', '/')
-                items.append(f'[`{display}`]({r["path"]})')
-            else:
-                desc = short_desc(r, 60) if r.get('description') else ''
-                if desc and desc != slug:
-                    items.append(f'[`{slug}`]({r["path"]}) — {desc}')
-                else:
-                    items.append(f'[`{slug}`]({r["path"]})')
-
-        lines.append(f'| **{key}** | {" · ".join(items)} |')
-
-    return '\n'.join(lines)
-
-
-def render_feedback_list(records):
-    feedbacks = sorted(
-        [r for r in records if r['type'] == 'feedback'],
-        key=lambda r: r['path']
-    )
-    items = [f'[`{slug_from_path(r["path"])}`]({r["path"]})' for r in feedbacks]
-    return ' · '.join(items)
-
-
-def render_reference_list(records):
-    refs = sorted(
-        [r for r in records if r['type'] == 'reference'],
-        key=lambda r: r['path']
-    )
-    items = []
-    for r in refs:
-        slug = slug_from_path(r['path'])
-        desc = short_desc(r, 50) if r.get('description') else ''
-        if desc:
-            items.append(f'[`{slug}`]({r["path"]}) — {desc}')
-        else:
-            items.append(f'[`{slug}`]({r["path"]})')
-    return ' · '.join(items)
-
-
-def replace_block(content, block_name, new_inner):
-    pattern = re.compile(
-        r'(<!-- AUTO:START ' + re.escape(block_name) + r' -->\n'
-        r'(?:<!--[^>]*-->\n)?)'
-        r'(.*?)'
-        r'(\n<!-- AUTO:END ' + re.escape(block_name) + r' -->)',
-        re.DOTALL
-    )
-    m = pattern.search(content)
-    if not m:
-        raise ValueError(f'缺 AUTO:START/END {block_name} 标记对')
-    return content[:m.start()] + m.group(1) + new_inner + m.group(3) + content[m.end():]
-
-
-def atomic_write(path, content):
-    dir_ = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=dir_, prefix='.update_index_md_', suffix='.tmp')
+def atomic_write_text(p: Path, content: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".update_", suffix=".tmp")
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
-        os.replace(tmp, path)
+        os.replace(tmp, p)
     except Exception:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
 
 
-def main():
-    if len(sys.argv) > 1:
-        mem_root = sys.argv[1]
-    else:
-        cwd_slug = os.getcwd().replace('/', '-')
-        mem_root = os.path.expanduser(f'~/.claude/projects/{cwd_slug}/memory')
+# ── 区块渲染 ───────────────────────────────────────────────────────
+def render_project_table(projects: list[dict], metas_by_key: dict[str, list[dict]]) -> str:
+    if not projects:
+        return "_(no projects yet)_\n"
+    lines = ["| 项目 | 分支数 | origin | 关键文档 |", "|---|---|---|---|"]
+    for p in sorted(projects, key=lambda x: x["display_name"].lower()):
+        key = p["key"]
+        docs = metas_by_key.get(key, [])
+        proj_docs = [m for m in docs if m["type"] in ("project", "overview")][:3]
+        # global/INDEX.md 位于 memex/global/,目标在 memex/projects/<key>/...
+        # 相对路径 = ../<m['path']>(m['path'] 已含 projects/<key>/...)
+        doc_str = " · ".join(f"[`{Path(m['path']).stem}`](../{m['path']})" for m in proj_docs) or "—"
+        origin = p.get("origin") or "(no origin)"
+        lines.append(f"| **{p['display_name']}** | {p.get('branch_count', 0)} | `{origin}` | {doc_str} |")
+    return "\n".join(lines) + "\n"
 
-    index_path = os.path.join(mem_root, 'INDEX.md')
-    if not os.path.exists(index_path):
-        print(f'❌ {index_path} 不存在', file=sys.stderr)
-        sys.exit(1)
 
-    with open(index_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+def render_link_list(records: list[dict], base_dir: str) -> str:
+    """渲染成「· [`name`](path) — desc · ...」一行链接列表。"""
+    if not records:
+        return "_(empty)_\n"
+    parts = []
+    for r in sorted(records, key=lambda x: x["path"]):
+        rel = r["path"]
+        # 相对 base_dir 算 link
+        try:
+            link = os.path.relpath(rel, base_dir)
+        except ValueError:
+            link = rel
+        name = Path(rel).stem
+        d = short_desc(r)
+        parts.append(f"[`{name}`]({link}) — {d}")
+    return " · ".join(parts) + "\n"
 
-    records = load_meta(mem_root)
-    print(f'  · 读 meta.jsonl: {len(records)} 条')
 
-    new_blocks = {
-        'project-table': '\n' + render_project_table(records) + '\n',
-        'feedback-list': '\n' + render_feedback_list(records) + '\n',
-        'reference-list': '\n' + render_reference_list(records) + '\n',
+def render_branch_list(branches: list[dict]) -> str:
+    if not branches:
+        return "_(no branches)_\n"
+    parts = []
+    for b in sorted(branches, key=lambda x: x["branch"]):
+        slug = b["branch_slug"]
+        # branches/<slug>.md 相对项目 INDEX 的链接
+        link = f"branches/{slug}.md"
+        parts.append(f"[`{b['branch']}`]({link})")
+    return " · ".join(parts) + "\n"
+
+
+# ── 替换 / 创建 ────────────────────────────────────────────────────
+AUTO_PATTERN = re.compile(
+    r"<!--\s*AUTO:START\s+([a-z0-9_-]+)\s*-->(.*?)<!--\s*AUTO:END\s+\1\s*-->",
+    re.DOTALL,
+)
+
+
+def replace_auto_blocks(text: str, replacements: dict[str, str]) -> tuple[str, list[str]]:
+    """把 text 里每个 AUTO 区块替换成对应内容。返回 (new_text, missing_blocks)。"""
+    found: set[str] = set()
+
+    def sub(m: re.Match) -> str:
+        name = m.group(1)
+        found.add(name)
+        if name in replacements:
+            return f"<!-- AUTO:START {name} -->\n{replacements[name]}<!-- AUTO:END {name} -->"
+        return m.group(0)
+
+    new_text = AUTO_PATTERN.sub(sub, text)
+    missing = [n for n in replacements if n not in found]
+    return new_text, missing
+
+
+def render_global_index(memex: Path) -> str:
+    projects = load_jsonl(memex / "_index/projects.jsonl")
+    metas = load_jsonl(memex / "_index/meta.jsonl")
+
+    metas_by_key: dict[str, list[dict]] = {}
+    for m in metas:
+        if m.get("project_key"):
+            metas_by_key.setdefault(m["project_key"], []).append(m)
+
+    g_feedback = [m for m in metas if m["path"].startswith("global/feedback/")]
+    g_reference = [m for m in metas if m["path"].startswith("global/reference/")]
+    g_misc = [m for m in metas
+              if m["path"].startswith("global/")
+              and not m["path"].startswith("global/feedback/")
+              and not m["path"].startswith("global/reference/")
+              and not m["path"].startswith("global/user/")
+              and not m["path"].endswith("INDEX.md")]
+
+    replacements = {
+        "project-table": "\n" + render_project_table(projects, metas_by_key) + "\n",
+        "feedback-list": "\n" + render_link_list(g_feedback, "global") + "\n",
+        "reference-list": "\n" + render_link_list(g_reference, "global") + "\n",
+        "misc-list": "\n" + render_link_list(g_misc, "global") + "\n",
     }
 
-    new_content = content
-    for name, inner in new_blocks.items():
-        try:
-            new_content = replace_block(new_content, name, inner)
-            print(f'  ✓ 重写 {name}')
-        except ValueError as e:
-            print(f'❌ {e} — abort,不写 INDEX.md', file=sys.stderr)
-            sys.exit(1)
+    index_path = memex / "global/INDEX.md"
+    if not index_path.exists():
+        template = GLOBAL_TEMPLATE.read_text(encoding="utf-8") if GLOBAL_TEMPLATE.exists() else "# Memex Global\n"
+        index_path.write_text(template, encoding="utf-8")
 
-    if new_content == content:
-        print('  · INDEX.md 内容无变化,不写')
-        return
-
-    atomic_write(index_path, new_content)
-    print(f'✅ 重写完成: {index_path}')
+    text = index_path.read_text(encoding="utf-8")
+    new_text, missing = replace_auto_blocks(text, replacements)
+    if missing:
+        print(f"⚠️ global/INDEX.md 缺 AUTO 区块: {missing}", file=sys.stderr)
+    atomic_write_text(index_path, new_text)
+    return str(index_path)
 
 
-if __name__ == '__main__':
-    main()
+def render_project_index(memex: Path, project_key: str) -> str:
+    projects = {p["key"]: p for p in load_jsonl(memex / "_index/projects.jsonl")}
+    branches = [b for b in load_jsonl(memex / "_index/branches.jsonl") if b["project_key"] == project_key]
+    metas = [m for m in load_jsonl(memex / "_index/meta.jsonl") if m.get("project_key") == project_key]
+
+    info = projects.get(project_key)
+    if not info:
+        print(f"⚠️ project {project_key} 不在 projects.jsonl", file=sys.stderr)
+        info = {"key": project_key, "display_name": project_key, "origin": "(unknown)"}
+
+    project_docs = [m for m in metas if m["type"] in ("project", "overview")]
+    project_feedback = [m for m in metas if m["type"] == "feedback"]
+    project_reference = [m for m in metas if m["type"] == "reference"]
+
+    replacements = {
+        "branch-list": "\n" + render_branch_list(branches) + "\n",
+        "project-docs": "\n" + render_link_list(project_docs, f"projects/{project_key}") + "\n",
+        "project-feedback": "\n" + render_link_list(project_feedback, f"projects/{project_key}") + "\n",
+        "project-reference": "\n" + render_link_list(project_reference, f"projects/{project_key}") + "\n",
+    }
+
+    index_path = memex / "projects" / project_key / "INDEX.md"
+    if not index_path.exists():
+        template_text = PROJECT_TEMPLATE.read_text(encoding="utf-8") if PROJECT_TEMPLATE.exists() else "# {{DISPLAY_NAME}}\n"
+        seeded = (template_text
+                  .replace("{{DISPLAY_NAME}}", info.get("display_name", project_key))
+                  .replace("{{KEY}}", project_key)
+                  .replace("{{ORIGIN}}", info.get("origin") or "(no origin)"))
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(seeded, encoding="utf-8")
+
+    text = index_path.read_text(encoding="utf-8")
+    new_text, missing = replace_auto_blocks(text, replacements)
+    if missing:
+        print(f"⚠️ projects/{project_key}/INDEX.md 缺 AUTO 区块: {missing}", file=sys.stderr)
+    atomic_write_text(index_path, new_text)
+    return str(index_path)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--memex", default=str(DEFAULT_MEMEX))
+    parser.add_argument("--global", dest="only_global", action="store_true", help="只跑 global/INDEX.md")
+    parser.add_argument("--project", help="只跑某 project key")
+    parser.add_argument("positional", nargs="?", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    memex = Path(args.positional or args.memex)
+
+    # 兼容 v0.1 调用:传入 mem_root → 静默跳过
+    if memex.name == "memory" and not (memex / "global").is_dir():
+        print(f"⚠️ v0.1 mem_root 跳过: {memex}", file=sys.stderr)
+        return 0
+
+    if not memex.is_dir():
+        print(f"❌ memex 根不存在: {memex}", file=sys.stderr)
+        return 1
+
+    if args.project:
+        p = render_project_index(memex, args.project)
+        print(f"✅ {p}")
+        return 0
+
+    if args.only_global:
+        p = render_global_index(memex)
+        print(f"✅ {p}")
+        return 0
+
+    # 全跑
+    p = render_global_index(memex)
+    print(f"✅ {p}")
+    projects = load_jsonl(memex / "_index/projects.jsonl")
+    for proj in projects:
+        p = render_project_index(memex, proj["key"])
+        print(f"✅ {p}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

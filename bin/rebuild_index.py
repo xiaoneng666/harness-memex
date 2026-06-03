@@ -1,231 +1,290 @@
 #!/usr/bin/env python3
-# rebuild_index.py — 重建 _index/meta.jsonl 和 _index/by_branch.jsonl
-#
-# 设计:
-#   · 扫所有 memory/**/*.md(排除 _index/ INDEX.md MEMORY.md backup-*)
-#   · 提取 frontmatter(支持顶层 type 和 metadata.type 两种格式)
-#   · 保留 last_access / decay / status(从旧 meta.jsonl 读),不重置
-#   · 文件不在旧索引 → last_access=mtime,decay=0,status=active
-#   · 文件在旧索引但本次扫描丢失 → 不保留(memory 被删/移)
-#
-# 用法:
-#   python3 ~/.claude/bin/rebuild_index.py [<mem_root>]
-#   省略 mem_root 时默认 ~/.claude/projects/<cwd-slug>/memory/
-#
-# harness:
-#   · tmpfile + rename 原子写
-#   · 重跑幂等(LRU 数据保留 → 第二次跑结果跟第一次一致)
+"""
+rebuild_index.py — Memex v0.2 索引重建
 
+扫 ~/.claude/memex/**/*.md → 重建 3 个 jsonl:
+  · _index/meta.jsonl       全部文件,LRU 用
+  · _index/branches.jsonl   分支记忆专用倒排
+  · _index/projects.jsonl   项目元数据(优先沿用现有)
+
+LRU 字段(last_access / decay / status)从旧 meta.jsonl 保留;新文件用 mtime 兜底。
+
+Usage:
+  rebuild_index.py                       # 扫 ~/.claude/memex/
+  rebuild_index.py --memex <path>        # 指定 memex 根
+  rebuild_index.py --memex <path> --no-rewrite-projects   # projects.jsonl 不动
+"""
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import re
 import sys
-import json
 import tempfile
 from datetime import datetime, timezone
-from collections import OrderedDict
+from pathlib import Path
+from typing import Optional
+
+HOME = Path.home()
+DEFAULT_MEMEX = HOME / ".claude/memex"
 
 
-def parse_frontmatter(path):
-    """提取 frontmatter 的 name / description / type。
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    支持两种格式:
-      ① 顶层:`type: xxx`
-      ② 嵌套:`metadata:\n  type: xxx`
-    """
+
+def mtime_iso(p: Path) -> str:
+    return datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_frontmatter(p: Path) -> dict:
+    """提取 name / description / type / project_key / branch。"""
+    out = {"name": p.stem, "description": "", "type": "", "project_key": "", "branch": ""}
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read(8192)
-    except Exception as e:
-        return {'name': '', 'description': '', 'type': '', '_error': str(e)}
+        with open(p, "r", encoding="utf-8") as f:
+            head = f.read(4096)
+    except OSError:
+        return out
+    if not head.startswith("---"):
+        return out
+    try:
+        end = head.index("\n---", 3)
+    except ValueError:
+        return out
+    block = head[3:end]
 
-    m = re.match(r'^---\n(.+?)\n---', content, re.DOTALL)
-    if not m:
-        return {'name': '', 'description': '', 'type': ''}
+    def grab_line(key: str) -> Optional[str]:
+        m = re.search(rf'^{key}:\s*(.*)$', block, re.MULTILINE)
+        if not m:
+            return None
+        v = m.group(1).strip().strip('"').strip("'")
+        return v
 
-    fm_block = m.group(1)
-    out = {'name': '', 'description': '', 'type': ''}
+    for k in ("name", "description"):
+        v = grab_line(k)
+        if v is not None:
+            out[k] = v
 
-    for key in ('name', 'description'):
-        km = re.search(rf'^{key}:\s*(.*)$', fm_block, re.MULTILINE)
-        if km:
-            v = km.group(1).strip()
-            if v.startswith('"') and v.endswith('"'):
-                v = v[1:-1]
-            elif v.startswith("'") and v.endswith("'"):
-                v = v[1:-1]
-            out[key] = v
-
-    nested = re.search(r'^metadata:\s*\n((?:\s+\w+:.*\n?)+)', fm_block, re.MULTILINE)
+    # type 优先 metadata.type
+    nested = re.search(r'^metadata:\s*\n((?:[ \t]+\w+:.*\n?)+)', block, re.MULTILINE)
     if nested:
-        type_match = re.search(r'^\s+type:\s*(\S+)', nested.group(1), re.MULTILINE)
-        if type_match:
-            out['type'] = type_match.group(1).strip()
-    if not out['type']:
-        type_match = re.search(r'^type:\s*(\S+)', fm_block, re.MULTILINE)
-        if type_match:
-            out['type'] = type_match.group(1).strip()
-
+        for k in ("type", "project_key", "branch"):
+            m = re.search(rf'^[ \t]+{k}:\s*(\S+)', nested.group(1), re.MULTILINE)
+            if m:
+                out[k] = m.group(1).strip().strip('"').strip("'")
+    if not out["type"]:
+        v = grab_line("type")
+        if v:
+            out["type"] = v
     return out
 
 
-def infer_type_from_path(rel_path):
+def infer_type_from_path(rel: str) -> str:
     """frontmatter 缺 type 时,从路径推断兜底。"""
-    if rel_path.startswith('feedback/'):  return 'feedback'
-    if rel_path.startswith('reference/'): return 'reference'
-    if rel_path.startswith('user/'):      return 'user'
-    if rel_path.startswith('global/'):    return 'global'
-    if '/branches/' in rel_path:          return 'branch'
-    if rel_path.startswith('projects/'):  return 'project'
-    return ''
+    parts = rel.split("/")
+    if parts[0] == "projects" and len(parts) >= 3:
+        if len(parts) >= 4 and parts[2] == "branches":
+            return "branch"
+        if parts[2] == "feedback":
+            return "feedback"
+        if parts[2] == "reference":
+            return "reference"
+        return "project"
+    if parts[0] == "global":
+        if len(parts) >= 2 and parts[1] in ("feedback", "reference", "user"):
+            return parts[1]
+        return "global"
+    return ""
 
 
-def infer_project_branch(rel_path):
-    """从路径推断 project 和 branch 字段。"""
-    parts = rel_path.split('/')
-    project, branch = '', ''
-    if parts[0] == 'projects' and len(parts) >= 2:
-        project = parts[1]
-        if 'branches' in parts:
-            idx = parts.index('branches')
-            if idx + 1 < len(parts):
-                branch_slug = parts[idx+1].replace('.md', '')
-                # feat_0602_example_feature → feat/<date>/example-feature
-                m = re.match(r'^(feat|bugfix|hotfix|fix)_(\d{4})_(.+)$', branch_slug)
-                if m:
-                    branch = f"{m.group(1)}/{m.group(2)}/{m.group(3).replace('_','-')}"
-                else:
-                    branch = branch_slug.replace('_', '/')
-    return project, branch
+def infer_project_branch(rel: str) -> tuple[str, str]:
+    """从路径推断 project_key + branch。"""
+    parts = rel.split("/")
+    if parts[0] == "projects" and len(parts) >= 4 and parts[2] == "branches":
+        project_key = parts[1]
+        branch_slug = parts[3].rsplit(".md", 1)[0]
+        return project_key, branch_slug
+    if parts[0] == "projects" and len(parts) >= 2:
+        return parts[1], ""
+    return "", ""
 
 
-def mtime_iso(p):
-    return datetime.fromtimestamp(os.path.getmtime(p), tz=timezone.utc).isoformat().replace('+00:00', 'Z')
-
-
-def load_old_index(idx_path):
-    """读旧 meta.jsonl,返回 {path: record} dict,用于保留 last_access/decay/status。"""
-    old = {}
-    if not os.path.exists(idx_path):
-        return old
-    with open(idx_path, 'r', encoding='utf-8') as f:
+def load_jsonl(p: Path) -> list[dict]:
+    if not p.exists():
+        return []
+    rows: list[dict] = []
+    with open(p, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
             try:
-                r = json.loads(line)
-                old[r['path']] = r
+                rows.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    return old
+    return rows
 
 
-def atomic_write(path, lines):
-    """tmpfile + rename 原子写,符合 harness 原则。"""
-    dir_ = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=dir_, prefix='.rebuild_', suffix='.tmp')
+def atomic_write_jsonl(p: Path, rows: list[dict]) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".rebuild_", suffix=".tmp")
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            for line in lines:
-                f.write(line + '\n')
-        os.replace(tmp, path)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        os.replace(tmp, p)
     except Exception:
-        os.unlink(tmp)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
         raise
 
 
-def main():
-    if len(sys.argv) > 1:
-        mem_root = sys.argv[1]
-    else:
-        cwd_slug = os.getcwd().replace('/', '-')
-        mem_root = os.path.expanduser(f'~/.claude/projects/{cwd_slug}/memory')
+# ── 主流程 ────────────────────────────────────────────────────────
+def rebuild(memex: Path, rewrite_projects: bool = True) -> dict:
+    idx_dir = memex / "_index"
+    idx_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = idx_dir / "meta.jsonl"
+    branches_path = idx_dir / "branches.jsonl"
+    projects_path = idx_dir / "projects.jsonl"
 
-    if not os.path.isdir(mem_root):
-        print(f'❌ memory 根目录不存在: {mem_root}', file=sys.stderr)
-        sys.exit(1)
+    old_meta = {r["path"]: r for r in load_jsonl(meta_path) if "path" in r}
+    old_projects = {r["key"]: r for r in load_jsonl(projects_path) if "key" in r}
 
-    idx_dir = os.path.join(mem_root, '_index')
-    os.makedirs(idx_dir, exist_ok=True)
-    meta_path = os.path.join(idx_dir, 'meta.jsonl')
-    branch_path = os.path.join(idx_dir, 'by_branch.jsonl')
+    metas: list[dict] = []
+    branches: list[dict] = []
+    project_seen: dict[str, int] = {}
 
-    old_meta = load_old_index(meta_path)
-    print(f'  · 读旧 meta.jsonl: {len(old_meta)} 条')
+    skip_dirs = {"_index", "_trash", "_archive"}
+    for md in memex.rglob("*.md"):
+        # 跳过 _index/* _trash/* _archive/*
+        if any(part in skip_dirs for part in md.relative_to(memex).parts):
+            continue
+        if md.name in ("INDEX.md",):
+            # INDEX.md 也入 meta(类型=index),但不进 branches
+            pass
 
-    records = []
-    branch_records = []
-    stats = {'scanned': 0, 'reused_last_access': 0, 'new_last_access': 0, 'fm_warnings': []}
+        rel = str(md.relative_to(memex))
+        fm = parse_frontmatter(md)
+        # 路径优先(无歧义),frontmatter type 当 fallback。旧 v0.1 文件
+        # 经常有 type:project 但实际是 branch,路径才是 ground truth。
+        path_type = infer_type_from_path(rel)
+        ftype = path_type or fm["type"]
+        if md.name == "INDEX.md":
+            ftype = "index"
+        project_key = fm["project_key"]
+        branch_slug = fm["branch"]
+        if not project_key or not branch_slug:
+            pk, bs = infer_project_branch(rel)
+            project_key = project_key or pk
+            branch_slug = branch_slug or bs
 
-    for root, dirs, files in os.walk(mem_root):
-        dirs[:] = [d for d in dirs if not d.startswith('_') and not d.startswith('backup-') and not d.startswith('.')]
-        for fname in files:
-            if not fname.endswith('.md'): continue
-            if fname in ('INDEX.md', 'MEMORY.md'): continue
+        size = md.stat().st_size
+        old = old_meta.get(rel, {})
+        last_access = old.get("last_access") or mtime_iso(md)
+        decay = old.get("decay", 0)
+        status = old.get("status", "active")
 
-            full = os.path.join(root, fname)
-            rel = os.path.relpath(full, mem_root)
-            stats['scanned'] += 1
+        metas.append({
+            "path": rel,
+            "type": ftype,
+            "project_key": project_key,
+            "branch": branch_slug,
+            "name": fm["name"],
+            "description": fm["description"],
+            "status": status,
+            "last_access": last_access,
+            "decay": decay,
+            "size": size,
+        })
 
-            fm = parse_frontmatter(full)
-            if not fm.get('name') or not fm.get('description'):
-                stats['fm_warnings'].append(rel)
+        if ftype == "branch" and project_key and branch_slug:
+            old_b: dict = {}
+            # 尝试从旧 branches 拿(可选,这里不必)
+            branches.append({
+                "project_key": project_key,
+                "branch": branch_slug,
+                "branch_slug": branch_slug,
+                "memory_path": rel,
+                "status": status,
+                "last_access": last_access,
+                "decay": decay,
+                "size": size,
+                "alive_on_remote": old_b.get("alive_on_remote", True),
+                "alive_locally": old_b.get("alive_locally", True),
+            })
+            project_seen[project_key] = project_seen.get(project_key, 0) + 1
+        elif project_key:
+            project_seen.setdefault(project_key, 0)
 
-            ftype = fm.get('type') or infer_type_from_path(rel)
-            project, branch = infer_project_branch(rel)
+    # 稳定排序(idempotent)
+    metas.sort(key=lambda r: r["path"])
+    branches.sort(key=lambda r: (r["project_key"], r["branch"]))
 
-            # 保留 LRU 字段
-            old = old_meta.get(rel, {})
-            last_access = old.get('last_access') or mtime_iso(full)
-            decay = old.get('decay', 0)
-            status = old.get('status', 'active')
-            if old:
-                stats['reused_last_access'] += 1
-            else:
-                stats['new_last_access'] += 1
+    atomic_write_jsonl(meta_path, metas)
+    atomic_write_jsonl(branches_path, branches)
 
-            record = OrderedDict([
-                ('path', rel),
-                ('type', ftype),
-                ('project', project),
-                ('branch', branch),
-                ('name', fm.get('name', '')),
-                ('description', fm.get('description', '')),
-                ('status', status),
-                ('last_access', last_access),
-                ('decay', decay),
-                ('size', os.path.getsize(full)),
-            ])
-            records.append(record)
+    # projects.jsonl:沿用旧值,只更新 branch_count + last_access
+    if rewrite_projects:
+        projects_out: list[dict] = []
+        for key, info in old_projects.items():
+            info = dict(info)
+            info["branch_count"] = project_seen.get(key, 0)
+            if key in project_seen:
+                info.setdefault("last_access", now_iso())
+            projects_out.append(info)
+        # 加新发现的 project_key(在 meta 里出现但 projects.jsonl 没有)
+        for key in project_seen:
+            if key not in old_projects:
+                projects_out.append({
+                    "key": key,
+                    "display_name": key.split("-", 1)[-1] if "-" in key else key,
+                    "origin": "",
+                    "origin_aliases": [],
+                    "repo_paths_seen": [],
+                    "tags": [],
+                    "first_seen": now_iso(),
+                    "last_access": now_iso(),
+                    "status": "active",
+                    "branch_count": project_seen[key],
+                })
+        projects_out.sort(key=lambda r: r["key"])
+        atomic_write_jsonl(projects_path, projects_out)
 
-            if branch:
-                branch_records.append(OrderedDict([
-                    ('project', project),
-                    ('branch', branch),
-                    ('memory', rel),
-                ]))
-
-    # 排序保证 idempotent
-    records.sort(key=lambda x: x['path'])
-    branch_records.sort(key=lambda x: (x['project'], x['branch']))
-
-    atomic_write(meta_path, [json.dumps(r, ensure_ascii=False) for r in records])
-    atomic_write(branch_path, [json.dumps(r, ensure_ascii=False) for r in branch_records])
-
-    print(f'  · 扫描 .md: {stats["scanned"]} 条')
-    print(f'  · 保留 last_access(LRU 不重置): {stats["reused_last_access"]} 条')
-    print(f'  · 新 last_access(用 mtime 兜底): {stats["new_last_access"]} 条')
-    print(f'  · 写 meta.jsonl: {len(records)} 行')
-    print(f'  · 写 by_branch.jsonl: {len(branch_records)} 行')
-
-    if stats['fm_warnings']:
-        print(f'  ⚠️ {len(stats["fm_warnings"])} 条 frontmatter 不全(name/description 缺):')
-        for w in stats['fm_warnings'][:5]:
-            print(f'      {w}')
-        if len(stats['fm_warnings']) > 5:
-            print(f'      ... 还有 {len(stats["fm_warnings"])-5} 条')
-
-    print(f'✅ rebuild 完成: {meta_path}')
+    return {
+        "meta": len(metas),
+        "branches": len(branches),
+        "projects": len(project_seen),
+    }
 
 
-if __name__ == '__main__':
-    main()
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--memex", default=str(DEFAULT_MEMEX), help="memex root (default: ~/.claude/memex)")
+    parser.add_argument("--no-rewrite-projects", action="store_true", help="不重写 projects.jsonl")
+    # 兼容老调用:rebuild_index.py <path> 当 memex 根
+    parser.add_argument("positional", nargs="?", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+
+    memex = Path(args.positional or args.memex)
+
+    # 老 hook 可能传旧 mem_root(.../memory/),不在 memex 根 → 兼容静默退出
+    if memex.name == "memory" and not (memex / "global").is_dir():
+        # 这是 v0.1 mem_root,新版不处理,等 LRU 回收
+        print(f"⚠️ v0.1 mem_root 跳过(等 LRU 自然回收): {memex}", file=sys.stderr)
+        return 0
+
+    if not memex.is_dir():
+        print(f"❌ memex 根不存在: {memex}", file=sys.stderr)
+        return 1
+
+    stats = rebuild(memex, rewrite_projects=not args.no_rewrite_projects)
+    print(f"✅ rebuild_index 完成:")
+    print(f"   · meta.jsonl       {stats['meta']} 行")
+    print(f"   · branches.jsonl   {stats['branches']} 行")
+    print(f"   · projects.jsonl   {stats['projects']} 项(更新 branch_count)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

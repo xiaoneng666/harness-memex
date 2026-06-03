@@ -8,8 +8,8 @@
 |---|---|---|---|---|---|
 | 跨 session 持久化 | ✓ 项目根 CLAUDE.md | ✓ 全局 | 部分 | ✓ | ✓ |
 | **分支感知**(切分支自动收档+启档) | ❌ | ❌ | ❌ | ❌ | **✓** |
-| **多 cwd 隔离**(不串记忆) | ❌ | ❌ | ❌ | ❌ | **✓** |
-| **同 session 内多工作面切换** | ❌ | ❌ | ❌ | ❌ | **✓** |
+| **项目隔离**(按 git origin,跨 cwd/worktree 一致) | ❌ | ❌ | ❌ | ❌ | **✓** |
+| **同 session 内多项目并行** | ❌ | ❌ | ❌ | ❌ | **✓** |
 | 自动维护(无需手动改) | ❌(要你改 CLAUDE.md)| 部分 | 部分 | ✓ | ✓ |
 | 结构化分类(6 类) | ❌ 一坨 markdown | ❌ | ❌ | tiered memory | **✓** feedback/reference/user/global/project/branch |
 | 索引查询 | grep | 向量(语义)| 向量 | tiered paging | **✓** JSONL O(1) jq 命中 |
@@ -38,8 +38,8 @@
 | Claude 自带做不到 | Memex 怎么做 |
 |---|---|
 | CLAUDE.md 是一坨,**没分类**(混了纪律/参考/分支/决策)| 6 类 frontmatter type 严格分工 |
-| 不会按分支变化(切分支后 CLAUDE.md 还是同一份)| `check-protected-branch.sh` 切分支自动加载目标分支 memory |
-| 不会按 cwd 子项目变化(monorepo 下子项目分支 hook 抓不到)| 多 cwd 隔离 + `cd <subdir>` / `git -C` 解析 |
+| 不会按分支变化(切分支后 CLAUDE.md 还是同一份)| `post-checkout-handoff.sh` 切分支自动让 LLM 并行写 from + 读 to 分支 memory |
+| 不会按 cwd 子项目变化(monorepo 下子项目分支 hook 抓不到)| 按 git origin 派生 project-key,跨 cwd/worktree 一致 |
 | `/resume` 只接续最近一次,跨数十 session 不顶 | jsonl 索引 + LRU 让数百条 memory 不爆 |
 | 没有"自动维护"概念(要你手动改)| 7 个 hook 把事件转译成自动维护动作 |
 | 没有自动压缩(老决策跟新决策一起占 context)| 30d × 3 次自动压缩到骨架 |
@@ -65,7 +65,7 @@
 - ❌ 服务端黑盒,你不知道存了啥,删了啥
 
 **Memex 怎么补**:
-- 每个 cwd 独立 memory(项目隔离)
+- 按 project-key(git origin)隔离 memory,worktree / 多 cwd 启动都一致
 - 全部本地 .md + .jsonl,你完全控制
 
 ---
@@ -123,7 +123,7 @@
 - ❌ 没有时间维度(哪条最近用 / 哪条很久没碰)
 
 **Memex 怎么补**:
-- 文件位置标准化(`~/.claude/projects/<cwd-slug>/memory/`)
+- 文件位置标准化(`~/.claude/memex/projects/<project-key>/`)
 - hook 自动注入对应分支 memory 进 Claude ctx
 - jsonl 索引让查询 O(1)
 - LRU 自动清理
@@ -136,7 +136,7 @@
 
 它们不互斥。Memex 跟 CLAUDE.md 配合用最佳:
 - CLAUDE.md 放静态项目元信息
-- Memex 管动态工作面 + 跨分支跨 cwd 隔离
+- Memex 管动态工作面 + 按 project-key 跨 cwd / worktree 隔离
 
 
 ---
@@ -151,8 +151,8 @@
 - [`codenamev/claude_memory`](https://github.com/codenamev/claude_memory) — Ruby gem
 
 Memex 跟它们的差异:
-1. 跟 **Auto Memory 协作**(`@import`,不抢资源)
-2. 同 Claude 进程内**多 cwd × 多分支**隔离矩阵(其它都是单 cwd)
-3. monorepo 子项目分支识别
+1. 跟 **Auto Memory 协作**(在 MEMORY.md 末尾追加 `<!-- memex:bridge -->` 块 + `@import`,不抢写权)
+2. 按 **git origin 派生 project-key** 隔离,worktree / monorepo / 多 cwd 启动都一致(绕过 [issue #39920](https://github.com/anthropics/claude-code/issues/39920))
+3. 同 Claude 进程内**多项目 × 多分支**矩阵(其它都是单 cwd / 单 repo)
 4. 显式 LRU 30d×3 + 60d 防误删 + 软删 `_trash/`
 5. 失败兜底 ctx 闭环

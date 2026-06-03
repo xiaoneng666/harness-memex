@@ -3,26 +3,28 @@
 > 优先级:P0 必做 / P1 应做 / P2 想做 / P3 远期
 > 欢迎在 issues 投票或提 PR。
 
-## P0 — 已完成(v0.1 发布范围)
+## P0 — 已完成(v0.2 发布范围)
 
-- [x] 5 个 event-listener hooks
-- [x] 3 个 Python CLI 工具(rebuild_index / update_index_md / lru_compact)
-- [x] JSONL 倒排索引(meta.jsonl + by_branch.jsonl)
+- [x] 7 个 event-listener hooks(含 v0.2 新增 post-checkout-handoff / session-start-lru)
+- [x] 6 个 Python CLI 工具(derive_project_key / update_memex_bridge / rebuild_index / update_index_md / lru_compact / migrate_v01_to_v02)
+- [x] JSONL 倒排索引(projects.jsonl + branches.jsonl + meta.jsonl)
 - [x] status × decay LRU 状态机(active → dormant → candidate_to_delete)
 - [x] 30d × 3 次压缩 + pinned 永不淘汰
-- [x] 多 cwd 严格隔离 + monorepo 子项目支持
+- [x] **按 project-key(git origin)隔离**(替代 v0.1 的「每 cwd 独立 mem_root」)
+- [x] **跨 worktree / 跨 cwd 一致**(绕过 [issue #39920](https://github.com/anthropics/claude-code/issues/39920))
+- [x] **MEMORY.md @import 桥**(不抢 Auto Memory 写权)
+- [x] **SessionStart 主动 LRU 扫**(原 v0.1 手动 → v0.2 自动)
+- [x] **post-write 自动刷 INDEX.md**(原 v0.1 手动 → v0.2 自动)
 - [x] 失败兜底 ctx 闭环(never silent fail)
 - [x] 傻瓜安装(install.sh)+ 安全卸载(uninstall.sh)
-- [x] 中英双语 README + 5 篇 docs
+- [x] v0.1 → v0.2 一次性迁移(`migrate_v01_to_v02.py` YAML mapping)
+- [x] 中英双语 README + 5+ 篇 docs + CHANGELOG
 
 ## P1 — 下一个 milestone
 
 - [ ] **`memory-doctor` 自检工具** — 自动检查 hook + jq + python3 + 索引一致性,给出修复建议
-- [ ] **SessionStart hook 周期 LRU** — 每周第一次启动自动跑 `lru_compact.py`(目前手动)
-- [ ] **`update_index_md.py` 自动跑** — 加 PostToolUse hook 在 memory 改后自动刷 INDEX.md
-- [ ] **测试套件** — `tests/` 下端到端测试,CI 跑
+- [ ] **测试套件** — `tests/` 下端到端测试(注意:用 `printf '%s'` 替代 `echo`,详 CHANGELOG xpg_echo)
 - [ ] **更多 examples** — global / project overview / 多语言项目示例
-- [ ] **CHANGELOG.md**
 - [ ] **i18n docs** — 日语 / 韩语 / 西班牙语 README
 
 ## P2 — 想做
@@ -31,7 +33,7 @@
   - 当前 JSONL 在 N=1000 时 jq 重写 ~150ms,N=10000 时秒级
   - 迁移路径:加 `~/.claude/bin/migrate_jsonl_to_sqlite.py`
 - [ ] **WebUI dashboard**
-  - 可视化 by_branch.jsonl 关联图谱
+  - 可视化 branches.jsonl 关联图谱
   - 时间线展示 last_access / decay 演化
 - [ ] **Cursor 适配**
   - Cursor 有 [hook system](https://docs.cursor.com/hooks),可移植 7 个 hook

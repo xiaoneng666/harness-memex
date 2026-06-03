@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/for-Claude%20Code-7B61FF.svg)](https://docs.claude.com/en/docs/claude-code)
 [![Bash + Python](https://img.shields.io/badge/Bash%20%2B%20Python-Lightweight-success.svg)]()
-[![Status: v0.1](https://img.shields.io/badge/Status-v0.1-orange.svg)]()
+[![Status: v0.2.1](https://img.shields.io/badge/Status-v0.2.1-blue.svg)]()
 
 > **Branch-aware extension pack for Claude Code Auto Memory**
 > 致敬 Vannevar Bush 1945 *Memex* 概念
@@ -36,14 +36,17 @@ Memex 补这块:
 
 同一 Claude 对话进程里,你 bash `cd <subdir> && git checkout <branch>` 自由切换 — **每次切换 hook 自动加载/卸载对应 mem_root,Claude 永远在"正确的工作面里"**。
 
-`Auto Memory` 是 cwd 级一份 memory;Memex 在它之上补 **cwd × 分支** 二维矩阵。
+`Auto Memory` 是 per-repo 一份 memory;Memex 在它之上补 **project × 分支** 全局池。**v0.2.1 起,project 共享层(overview / 项目 feedback / reference)也彻底跟 cwd 无关** — 任何 cwd / 任何 Claude 进程,一旦碰过 project X 30 天内都自动 @import 它的 INDEX。
 
-实现:
-- `~/.claude/projects/<cwd-slug>/memory/` **每 cwd 独立 mem_root**
-- `_index/by_branch.jsonl` **每分支倒排索引**
-- `check-protected-branch.sh` 切分支时**收档当前 + 启档目标 + 注入目标 memory 前 200 行进 ctx**
-- `pre-edit-branch-notice.sh` 编辑前**用 `cd <path>` / `git -C <path>` 反推子项目分支**
-- 严格不跨 cwd glob → **多个项目同名分支不会串**
+实现(v0.2.1):
+- `~/.claude/memex/projects/<project-key>/branches/<slug>.md` **每 project 每分支独立 memory**
+- project-key 由 `git remote get-url origin` 归一化 + sha1[:12] 派生 — **跨 cwd、跨 worktree 稳定**
+- `_index/branches.jsonl` **(project_key, branch) → memory_path 倒排索引(O(1) 查)**
+- `post-checkout-handoff.sh` 切分支时**ctx 同回合并行 Read project INDEX + Read to-branch memory + Write from-branch memory**(项目共享层 + 分支层一次拉齐)
+- `pre-edit-branch-notice.sh` 编辑前**derive_project_key + ctx 含 project INDEX + 本分支 memory**
+- bootstrap 在 Claude `MEMORY.md` 末尾幂等注入 `<!-- memex:bridge -->` 块(@import cwd-发现 + recently-active 项目),**不抢 Auto Memory 写权**
+- bootstrap 在 `~/.claude/CLAUDE.md` 末尾幂等维护 `<!-- memex:catalog -->` 块(@import 全局 INDEX)→ **任何 cwd 启动都能看到所有项目目录**(v0.2.1;永久 opt-out:`touch ~/.claude/memex/.no_catalog`)
+- hook 触发后异步 `--touch project_key` bump last_access → **碰过的 project 30d 内任何 session 自动 @import**(v0.2.1)
 
 ---
 
@@ -56,7 +59,7 @@ Memex 补这块:
 | 用户纪律每次都要提醒 | feedback 持久化,Read 时自动续命防 LRU 误杀 |
 | memory 越多越难找 | JSONL 索引 O(1) 查,jq 一行命中 |
 | 长开发期 context bloat | 30d × 3 次自动压缩,关键决策永久保留 |
-| 多 cwd 同名分支串记忆 | cwd-slug 严格隔离,monorepo 子项目原生支持 |
+| 多项目同名分支串记忆 | project-key(git origin)隔离,worktree / monorepo / 多 cwd 都正确 |
 
 ---
 
@@ -100,16 +103,20 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
                 │  (7 件套)    │   只塞事实,不做决策
                 └──────┬──────┘
                        │ ctx 注入 / 索引同步
-        ┌──────────────▼──────────────┐
-        │   ~/.claude/projects/<cwd>/  │
-        │   memory/                    │
-        │   ├── INDEX.md(人读)          │
-        │   ├── _index/*.jsonl(机器索引)│
-        │   ├── feedback/(纪律)         │
-        │   ├── reference/(外部资源)    │
-        │   └── projects/<biz>/         │
-        │       └── branches/<slug>.md  │
-        └──────────────────────────────┘
+        ┌──────────────▼──────────────────────┐
+        │  Claude Code 原生(不动)            │
+        │  ~/.claude/projects/<cc-slug>/memory/│
+        │  └── MEMORY.md ← memex bridge       │
+        │       └── @import 下面的 INDEX 们 ──┼─┐
+        └──────────────────────────────────────┘ │
+        ┌──────────────────────────────────────┐ │
+        │  Memex 全局池(项目维度,无 cwd)   │◄┘
+        │  ~/.claude/memex/                    │
+        │  ├── _index/{projects,branches,meta} │
+        │  ├── global/{feedback,reference,...} │
+        │  └── projects/<project-key>/         │
+        │      └── branches/<slug>.md          │
+        └──────────────────────────────────────┘
 ```
 
 ### 7 个 Hook 干什么(都是 event listener)
@@ -124,66 +131,81 @@ Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键�
 | `post-write-memory-sync.sh` | PostToolUse Write/Edit | memory 文件改后自动入索引 |
 | **`session-start-lru.sh`** | SessionStart | 主动跑 LRU 扫,有候选塞 ctx 让 LLM 决定压缩 |
 
-### 3 个 Python CLI 工具
+### 6 个 Python CLI 工具
 
 | 工具 | 作用 |
 |---|---|
-| `rebuild_index.py` | 全量重建 JSONL 索引(LRU 字段保留) |
-| `update_index_md.py` | 从索引自动重写 INDEX.md 标记区块 |
-| `lru_compact.py` | LRU 周扫 + 分支删除检测 + `--mark`/`--pin`/`--unpin`/**`--rm`**(三层安全闸门 + 软删 `_trash/`)|
+| `derive_project_key.py` | git remote 归一化 + sha1[:12] → project_key(单一身份来源) |
+| `update_memex_bridge.py` | 扫 cwd 子目录所有 git repo,在 Claude `MEMORY.md` 末尾幂等替换 bridge 区块 |
+| `rebuild_index.py` | 全量重建 3 个 JSONL 索引(LRU 字段保留) |
+| `update_index_md.py` | 从索引自动重写 global + 每 project 的 INDEX.md 标记区块 |
+| `lru_compact.py` | LRU 周扫 + 分支死亡检测 + `--mark`/`--pin`/`--unpin`/**`--rm`**(三层安全闸门 + 软删 `_trash/`)|
+| `migrate_v01_to_v02.py` | v0.1 → v0.2 一次性迁移(YAML mapping 驱动) |
 
-### 关键设计决策
+### 关键设计决策(v0.2)
 
 - **JSONL 不是 SQLite** — LLM 可读,无注入,千级规模够,降级简单
-- **每个 cwd 独立 mem_root** — 严格隔离,不跨 cwd glob(防同名分支串)
+- **project-key 而非 cwd-slug 做隔离** — git origin 归一化派生,跨 cwd / 跨 worktree 稳定
 - **status × decay 矩阵** — `pinned` 永不淘汰 / `active` 30d 自动 demote / `dormant` 走压缩
 - **30d × 3 次压缩** — 90 天到候选删除,再 30d 真删,共 120 天保护期
 - **失败兜底 ctx 闭环** — 脚本解析失败 → 塞 ⚠️ ctx 让 LLM 接管,**never silent fail**
 - **静态归脚本动态归 LLM** — hook 只支持最简两种 shell 形式,复杂命令一律降级给 LLM
-- **不抢 Auto Memory 资源** — bootstrap 检测 MEMORY.md 状态:不存在 → 软链;Auto Memory 写的 → 末尾追加 `@INDEX.md` 幂等。详见 [AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md)
+- **不抢 Auto Memory 资源** — bootstrap 在 MEMORY.md 末尾追加 `<!-- memex:bridge -->` 区块,Claude 自己的写入不受影响
 - **PostToolUse 切分支 handoff** — Bash 执行完(已切完)塞 ctx,LLM 并行 `Write a-memory` + `Read b-memory`(同回合 2 个 tool call)
+- **绕过 [issue #39920](https://github.com/anthropics/claude-code/issues/39920)** — Claude Code 用 `git-common-dir` 派生 slug 在 worktree 下有 bug;memex 直接用 git origin 派生 project-key,worktree 天然走通
 
 详见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ---
 
-## 📂 它建立的目录结构
+## 📂 它建立的目录结构(v0.2)
 
 ```
-全局(任何 cwd 共享,装一次):
+全局(装一次):
 ~/.claude/
-├── MEMORY_SPEC.md              单一权威规范(9 节)
-├── INDEX_TEMPLATE.md           新 cwd 用的 INDEX 模板
-├── hooks/
-│   ├── session-bootstrap.sh
+├── MEMORY_SPEC.md                  单一权威规范(v0.2,11 节)
+├── MEMEX_GLOBAL_INDEX_TEMPLATE.md
+├── MEMEX_PROJECT_INDEX_TEMPLATE.md
+├── hooks/                          7 件套
+│   ├── session-bootstrap.sh        薄壳 → update_memex_bridge.py
 │   ├── pre-read-memory-bump.sh
 │   ├── check-protected-branch.sh
 │   ├── pre-edit-branch-notice.sh
-│   ├── post-checkout-handoff.sh        ← PostToolUse 切分支 handoff
+│   ├── post-checkout-handoff.sh
 │   ├── post-write-memory-sync.sh
-│   └── session-start-lru.sh            ← SessionStart 主动 LRU 扫
-└── bin/
+│   └── session-start-lru.sh
+└── bin/                            6 个 Python 工具
+    ├── derive_project_key.py
+    ├── update_memex_bridge.py
     ├── rebuild_index.py
     ├── update_index_md.py
-    └── lru_compact.py
+    ├── lru_compact.py
+    └── migrate_v01_to_v02.py
 
-每个 cwd 自动建出(独立工作面):
-~/.claude/projects/<cwd-slug>/memory/
-├── INDEX.md                    人读入口 + AUTO 标记区块
-├── MEMORY.md → INDEX.md        软链(Claude system prompt 注入)
+Memex 全局池(project 维度,无 cwd 维度):
+~/.claude/memex/
 ├── _index/
-│   ├── meta.jsonl              每条 memory 一行(LRU + decay + size)
-│   └── by_branch.jsonl         (project, branch) → memory 倒排
-├── feedback/                   纪律 / 规则(read-heavy)
-├── reference/                  外部系统引用
-├── user/                       用户画像
-├── global/                     跨业务的项目级文档
+│   ├── projects.jsonl              project-key → 元数据
+│   ├── branches.jsonl              (project_key, branch) → memory_path 倒排(O(1))
+│   └── meta.jsonl                  全部 .md 一行(LRU + decay + size)
+├── global/
+│   ├── INDEX.md                    所有 cwd 都 @import 它
+│   ├── feedback/                   跨项目纪律
+│   ├── reference/                  跨项目外部引用
+│   └── *.md                        跨项目集合文档
 └── projects/
-    └── <business>/
+    └── <project-key>/              一个 git repo = 一个 key
+        ├── INDEX.md                项目门面(被 Claude MEMORY.md @import)
         ├── overview.md
-        ├── *.md(长期决策)
+        ├── feedback/               项目专属纪律
+        ├── reference/              项目专属外部引用
+        ├── *.md                    长期决策
         └── branches/
-            └── <branch_slug>.md   分支独立工作面
+            └── <branch_slug>.md    分支记忆**只此一份**
+
+Claude Code 原生(我们不动):
+~/.claude/projects/<cc-slug>/memory/
+└── MEMORY.md                       ← bootstrap 在末尾幂等追加 memex:bridge 块
 ```
 
 ---
@@ -207,9 +229,9 @@ cd harness-memex
 
 `install.sh` 会:
 1. 检查依赖
-2. 复制 hooks → `~/.claude/hooks/`
-3. 复制 bin → `~/.claude/bin/`
-4. 复制 MEMORY_SPEC / INDEX_TEMPLATE → `~/.claude/`
+2. 复制 hooks → `~/.claude/hooks/`(7 件套)
+3. 复制 bin → `~/.claude/bin/`(6 个 Python 工具)
+4. 复制 `MEMORY_SPEC.md` + `MEMEX_GLOBAL_INDEX_TEMPLATE.md` + `MEMEX_PROJECT_INDEX_TEMPLATE.md` → `~/.claude/`
 5. 合并 hook 配置进 `~/.claude/settings.json`(自动备份,不覆盖现有)
 6. chmod +x
 
@@ -217,11 +239,12 @@ cd harness-memex
 
 ### 验证装好了
 
-新开会话,任意 cwd 跑一个 bash:
+新开会话,任意 cwd 跑一个 bash 让 bootstrap 触发,然后:
 ```
-ls ~/.claude/projects/$(pwd | sed 's#/#-#g')/memory/
+ls ~/.claude/memex/                        # 全局池根
+cat ~/.claude/memex/_index/projects.jsonl  # 当前识别到的 projects
 ```
-若看到 `INDEX.md _index/ feedback/ projects/ ...`,就好了。
+若看到 `_index/  global/  projects/` 三层 + projects.jsonl 含 cwd 下 git repo,就好了。
 
 ---
 
@@ -298,9 +321,9 @@ LLM 逐个 Read → 写紧凑版 → lru_compact.py --mark <path> 1 更新 decay
 ```
 
 会:
-- 删 `~/.claude/hooks/{7 件套}.sh` 和 `~/.claude/bin/{3 工具}.py`
+- 删 `~/.claude/hooks/{7 件套}.sh` 和 `~/.claude/bin/{6 工具}.py`
 - 从 `~/.claude/settings.json` 移除对应 hook 注册(备份保留)
-- **保留所有 `~/.claude/projects/*/memory/`**(你的工作面不丢)
+- **保留所有 `~/.claude/memex/`** 和 `~/.claude/projects/*/memory/`(你的工作面不丢)
 
 ---
 
@@ -330,7 +353,7 @@ LLM 逐个 Read → 写紧凑版 → lru_compact.py --mark <path> 1 更新 decay
 ## ❓ FAQ
 
 ### Q: 跟 Claude Code 自带的 CLAUDE.md 冲突吗?
-**A**:完全不冲突,**互补**。CLAUDE.md 放项目静态元信息,Memex 管动态工作面;bootstrap 智能检测 MEMORY.md 状态:不存在 → 软链 INDEX.md;Auto Memory 写过的 → 末尾追加 `@INDEX.md` 幂等。详见 [docs/AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md)。
+**A**:完全不冲突,**互补**。CLAUDE.md 放项目静态元信息,Memex 管动态工作面;bootstrap 在 Auto Memory 的 `MEMORY.md` 末尾幂等追加 `<!-- memex:bridge -->` 区块,内容是 `@import` 全局池 + 有内容项目的 INDEX。**不抢 Auto Memory 写权**。详见 [docs/AUTO-MEMORY-INTEGRATION.md](./docs/AUTO-MEMORY-INTEGRATION.md)。
 
 ### Q: 会影响 Claude Code 性能吗?
 **A**:几乎无感。hook 平均 < 50ms / 次;post-write-sync 全量 reindex 在 N=50 条时约 30ms;LRU 扫是手动跑,不影响日常。

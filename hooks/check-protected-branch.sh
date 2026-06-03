@@ -58,49 +58,39 @@ resolve_git_dir() {
   echo "$p"
 }
 
-# ─── 上溯找 mem_root(spec § 九 A 方案):当前 cwd mem_root 不存在或无 by_branch.jsonl 时
-# 沿 parent 递归查,直到找到含 _index/by_branch.jsonl 的最近 mem_root。
-# 支持 monorepo workspace 模式:主 cwd 启动 Claude + 子项目里 cd 跑命令。
-find_mem_root() {
-  local cwd="$1"
-  while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
-    local slug
-    slug=$(printf '%s' "$cwd" | sed 's#/#-#g')
-    local mr="$HOME/.claude/projects/${slug}/memory"
-    if [ -f "$mr/_index/by_branch.jsonl" ]; then
-      echo "$mr"
-      return 0
-    fi
-    cwd=$(dirname "$cwd")
-  done
-  # 全程找不到 → fallback 当前 cwd(可能 mem_root 不存在,caller 自己处理)
-  local slug
-  slug=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
-  echo "$HOME/.claude/projects/${slug}/memory"
-}
-
-# ─── 查分支 memory:在上溯找到的 mem_root 里查 ───
+# ─── 查分支 memory(v0.2):derive_project_key + branches.jsonl O(1) ───
 lookup_branch_memory() {
   local branch="$1"
-  local mem_root
-  mem_root=$(find_mem_root "$(pwd)")
-  [ -d "$mem_root" ] || return 0
+  local git_dir="${2:-.}"
+  local derive_key="$HOME/.claude/bin/derive_project_key.py"
+  local memex="$HOME/.claude/memex"
+  local python3
+  python3=$(command -v python3 2>/dev/null || echo /usr/bin/python3)
 
-  local idx="$mem_root/_index/by_branch.jsonl"
+  [ -f "$derive_key" ] || return 0
+  local info
+  info=$("$python3" "$derive_key" "$git_dir" 2>/dev/null)
+  local key
+  key=$(printf '%s' "$info" | jq -r '.key // ""' 2>/dev/null)
+  [ -z "$key" ] || [ "$key" = "null" ] && return 0
+
+  local slug
+  slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
+
+  local idx="$memex/_index/branches.jsonl"
   if [ -f "$idx" ]; then
     local rel
-    rel=$(jq -r --arg b "$branch" 'select(.branch==$b) | .memory' "$idx" 2>/dev/null | head -1)
-    if [ -n "$rel" ] && [ -f "$mem_root/$rel" ]; then
-      echo "$mem_root/$rel"
+    rel=$(jq -r --arg k "$key" --arg b "$slug" \
+          'select(.project_key==$k and .branch_slug==$b) | .memory_path' \
+          "$idx" 2>/dev/null | head -1)
+    if [ -n "$rel" ] && [ -f "$memex/$rel" ]; then
+      echo "$memex/$rel"
       return 0
     fi
   fi
 
-  # fallback:本 cwd glob(不跨 cwd)
-  local slug
-  slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
-  ls "$mem_root"/projects/*/*/branches/"${slug}".md 2>/dev/null | head -1
-  ls "$mem_root"/projects/*/branches/"${slug}".md 2>/dev/null | head -1
+  # fallback glob
+  ls "$memex/projects/$key/branches/${slug}.md" 2>/dev/null | head -1
 }
 
 # Normalize:把 "git -C <path>" 改成 "git",让外层 case 子串匹配
@@ -133,7 +123,7 @@ case "$cmd_n" in
       exit 2
     fi
 
-    memfile=$(lookup_branch_memory "$branch")
+    memfile=$(lookup_branch_memory "$branch" "$git_dir")
     if [ -n "$memfile" ]; then
       ctx="提交核实 · 当前分支: ${branch} · 本分支记忆: ${memfile}
 

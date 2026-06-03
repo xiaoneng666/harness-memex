@@ -105,12 +105,16 @@ for f in "$SRC"/bin/*.py; do
 done
 echo "  小结: 安装 $copied · 跳过 $skipped"
 
-# ───── 5. 复制 MEMORY_SPEC + INDEX_TEMPLATE ─────
+# ───── 5. 复制 MEMORY_SPEC + INDEX templates (v0.2) ─────
 echo
-echo "[4/6] 安装 spec + template → $DOTCLAUDE"
-for f in MEMORY_SPEC.md INDEX_TEMPLATE.md; do
+echo "[4/6] 安装 spec + templates → $DOTCLAUDE"
+for f in MEMORY_SPEC.md MEMEX_GLOBAL_INDEX_TEMPLATE.md MEMEX_PROJECT_INDEX_TEMPLATE.md; do
   src="$SRC/templates/$f"
   tgt="$DOTCLAUDE/$f"
+  if [ ! -f "$src" ]; then
+    printf "  $C_WARN %s 在 templates/ 下不存在,跳过\n" "$f"
+    continue
+  fi
   if [ -e "$tgt" ]; then
     printf "  $C_WARN %s 已存在,保留(手动 diff: diff %s %s)\n" "$f" "$src" "$tgt"
   else

@@ -29,8 +29,9 @@ claude  # 启动 Claude Code
 
 **期望**:
 - Claude 跑 ls
-- 你看到 system message:`✨ 本 cwd memory 工作面已按 ~/.claude/MEMORY_SPEC.md 初始化`
-- 跑 `ls ~/.claude/projects/-Users-x-demo-proj-a/memory/` 看到完整骨架
+- 你看到 system message:`✨ Memex v0.2 初始化完成 (~/.claude/memex/)。识别到本 cwd 下 N 个 git repo。INDEX 已搭桥...`
+- 跑 `ls ~/.claude/memex/` 看到 `_index/  global/  projects/` 三层骨架
+- 跑 `python3 ~/.claude/bin/derive_project_key.py ~/demo/proj-a` 看到 `{"key": "<hash>-proj-a", ...}`
 
 ---
 
@@ -42,9 +43,10 @@ claude  # 启动 Claude Code
 ```
 
 **期望**:
-- Claude Write `~/.claude/projects/-Users-x-demo-proj-a/memory/feedback/go-error-handling.md`
-- `post-write-memory-sync.sh` hook 触发,stderr 显示 `[date] post-write-memory-sync: ...`
-- 跑 `grep go-error-handling ~/.claude/projects/-Users-x-demo-proj-a/memory/_index/meta.jsonl`,看到这条记录
+- Claude 决定这条是项目专属(只对 proj-a),Write 到 `~/.claude/memex/projects/<key-A>/feedback/go-error-handling.md`
+- (或决定是全局纪律,Write 到 `~/.claude/memex/global/feedback/go-error-handling.md`)
+- `post-write-memory-sync.sh` hook 触发,stderr 显示 `[date] post-write-memory-sync: ...` + 自动跑 rebuild + 刷对应 INDEX.md
+- 跑 `grep go-error-handling ~/.claude/memex/_index/meta.jsonl`,看到这条记录
 
 ---
 
@@ -64,7 +66,7 @@ echo "profile" > profile.go && git add . && git commit -qm "feat: profile skelet
 > 在 memory 里记一条:profile 用 OAuth 拉头像,storage 走 S3
 ```
 
-Claude 会建 `projects/<biz>/branches/feat_0531_profile.md`。
+Claude 会建 `~/.claude/memex/projects/<key-A>/branches/feat_<date>_profile.md`。
 
 **切回 feat/<date>/login**:
 ```
@@ -72,12 +74,13 @@ Claude 会建 `projects/<biz>/branches/feat_0531_profile.md`。
 ```
 
 **期望**:
-- `check-protected-branch.sh` hook 触发
+- `post-checkout-handoff.sh` hook 触发(PostToolUse,checkout 已成功)
 - 你看到 ctx 注入(via system message):
-  - 🔄 切分支 feat/<date>/profile → feat/<date>/login
-  - 【收档 · feat/<date>/profile】memory: ...
-  - 【启档 · feat/<date>/login】memory 文件无(因为还没写)
-- Claude 立即知道现在在 login 分支
+  - 🔄 切分支完成(proj-a): feat/<date>/profile → feat/<date>/login
+  - 立刻并行处理(无依赖,可同时发):
+    - Write `~/.claude/memex/projects/<key-A>/branches/feat_<date>_profile.md`(收档)
+    - Read `~/.claude/memex/projects/<key-A>/INDEX.md`(启档,目标分支没 memory 时看项目门面)
+- Claude 同回合并行发 Write + Read 两个 tool call,立即知道现在在 login 分支
 
 ---
 
@@ -91,9 +94,9 @@ Claude 会建 `projects/<biz>/branches/feat_0531_profile.md`。
 ```
 
 Claude 会自动:
-- bootstrap proj-b 的 mem_root(因为是新 cwd)
-- 在 `~/.claude/projects/-Users-x-demo-proj-b/memory/` 建 feedback
-- post-write-sync 入索引
+- 当前 cwd 仍是 ~/demo/proj-a,bootstrap 没新跑(同 session 同 cwd 已 marker)
+- **但 proj-b 是不同 git repo,有自己的 project-key**
+- post-write 时 hook 自动按文件路径下的 project_key 维护索引
 
 **切回 proj-a**:
 ```
@@ -102,11 +105,11 @@ Claude 会自动:
 ```
 
 **期望**:
-- hook 加载 proj-a 的 feat/<date>/login memory(如果有)
-- **proj-b 的 memory 完全不串过来**
+- `post-checkout-handoff.sh` 用 proj-a 的 project_key 查 `branches.jsonl`,命中 proj-a 的 feat/<date>/login memory(如果有)
+- **proj-b 的 memory 完全不串过来** — 因为查询是按 `(project_key_A, branch)` 二维
 - Claude 知道现在在 proj-a 而不是 proj-b
 
-> **这就是杀手锏特性**:同一个 Claude 进程,N×M 的工作面隔离矩阵。
+> **这就是杀手锏特性**:**按 project-key(git origin)隔离**,同 Claude 进程内 N 项目 × M 分支矩阵。同名分支跨 repo 不会串。
 
 ---
 
@@ -114,7 +117,7 @@ Claude 会自动:
 
 ```bash
 # 看 feedback 当前 last_access
-grep go-error-handling ~/.claude/projects/-Users-x-demo-proj-a/memory/_index/meta.jsonl
+grep go-error-handling ~/.claude/memex/_index/meta.jsonl
 ```
 
 **在 Claude 里**:
@@ -126,7 +129,7 @@ Claude 会 Read 那个文件。
 
 ```bash
 # 复查 last_access
-grep go-error-handling ~/.claude/projects/-Users-x-demo-proj-a/memory/_index/meta.jsonl
+grep go-error-handling ~/.claude/memex/_index/meta.jsonl
 ```
 
 **期望**:`last_access` 时间戳已经更新到刚才。这是 `pre-read-memory-bump.sh` hook 干的。
@@ -151,15 +154,15 @@ python3 ~/.claude/bin/lru_compact.py
 **模拟 30d 后**:
 ```bash
 # 把某条 memory 的 last_access 改成 40 天前(模拟)
-mem_root="$HOME/.claude/projects/-Users-x-demo-proj-a/memory"
+MEMEX="$HOME/.claude/memex"
 python3 -c "
 import json
-with open('$mem_root/_index/meta.jsonl') as f:
+with open('$MEMEX/_index/meta.jsonl') as f:
     lines = [json.loads(l) for l in f if l.strip()]
 for r in lines:
     if 'profile' in r['path']:
         r['last_access'] = '2025-04-23T00:00:00Z'
-with open('$mem_root/_index/meta.jsonl', 'w') as f:
+with open('$MEMEX/_index/meta.jsonl', 'w') as f:
     for r in lines:
         f.write(json.dumps(r, ensure_ascii=False) + '\n')
 "
@@ -172,16 +175,16 @@ python3 ~/.claude/bin/lru_compact.py
 ```
 ## 待第 1 次压缩 (decay 0→1, 30d 未 access) — 1 条
    动作: ≤ 2KB · 保留 Why/决策/状态/链接
-   · projects/.../branches/feat_0531_profile.md  (X B, 40d 未 access)
+   · projects/<key>/branches/feat_<date>_profile.md  (X B, 40d 未 access)
        <description>
 
 ---
-压缩流程(LLM 决策):见 ~/.claude/MEMORY_SPEC.md § 三.A
+压缩流程(LLM 决策):见 ~/.claude/MEMORY_SPEC.md § 四.A
 ```
 
 **让 Claude 压缩**:
 ```
-> 按 spec § 三.A 把 LRU 扫到的这条压缩到 ≤ 2KB
+> 按 spec § 四.A 把 LRU 扫到的这条压缩到 ≤ 2KB
 ```
 
 Claude 会 Read + Write 紧凑版,然后跑 `lru_compact.py --mark` 更新 decay。
@@ -214,7 +217,11 @@ export MEMEX_PROTECTED_BRANCHES="main master develop"  # 移除 production
 
 ```bash
 rm -rf ~/demo
-rm -rf ~/.claude/projects/-Users-x-demo-proj-a ~/.claude/projects/-Users-x-demo-proj-b
+# memex 池里的 proj-a / proj-b 项目骨架(若想清):
+PROJ_A_KEY=$(python3 ~/.claude/bin/derive_project_key.py ~/demo/proj-a 2>/dev/null | jq -r .key)
+PROJ_B_KEY=$(python3 ~/.claude/bin/derive_project_key.py ~/demo/proj-b 2>/dev/null | jq -r .key)
+rm -rf ~/.claude/memex/projects/${PROJ_A_KEY} ~/.claude/memex/projects/${PROJ_B_KEY}
+python3 ~/.claude/bin/rebuild_index.py  # 重建索引
 ```
 
 ---

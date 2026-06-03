@@ -34,14 +34,14 @@
 ### Q: 同一个 Claude session 里能切多个项目吗?
 **A**:**能,这是核心亮点**。
 - 同 session 内你可以:cwd A 工作 → cd B → cd A → cwd C
-- 每次切换,hook 自动加载/卸载对应 cwd 的 memory
-- 每个 cwd 严格隔离,不会串
+- v0.2:bootstrap 把 cwd 下所有 git repo 的 INDEX 都 `@import` 到 MEMORY.md
+- 切分支时按 `git origin` 派生的 project-key 命中各自的分支记忆 — **同名分支跨 repo 不会串**
 
 ### Q: 同一个 cwd 里切多个分支会串吗?
-**A**:不会。`by_branch.jsonl` 倒排索引按分支精确命中。切分支时 hook 自动收档当前分支 + 启档目标分支。
+**A**:不会。`branches.jsonl` 按 `(project_key, branch_slug)` 二维倒排,jq O(1) 命中目标分支记忆。切分支时 `post-checkout-handoff.sh` 自动收档 from + 启档 to。
 
-### Q: monorepo 下子项目分支怎么办?
-**A**:支持。hook 解析 `cd <subdir> && git ...` / `git -C <subdir> ...` 两种最简形式,自动拿到子项目分支。复杂 shell(pushd / 别名 / subshell)失败时 hook 塞 ⚠️ ctx 让 LLM 接管。
+### Q: monorepo / workspace 下子项目分支怎么办?
+**A**:**v0.2 天然支持**。hook 解析 `cd <subdir> && git ...` / `git -C <subdir> ...` 两种最简形式,从子项目 git repo 派生 project-key,完全独立。worktree 也走通(不再被 Claude Code [issue #39920](https://github.com/anthropics/claude-code/issues/39920) 影响)。复杂 shell(pushd / 别名 / subshell)失败时 hook 塞 ⚠️ ctx 让 LLM 接管。
 
 ### Q: 跟向量检索 RAG 比怎样?
 **A**:**不同的设计目标**。

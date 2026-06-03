@@ -1,6 +1,8 @@
-# Architecture — 设计哲学与决策记录
+# Architecture — 设计哲学与决策记录(v0.2)
 
 > Memex 不是把 ChatGPT 的 memory 抄一遍。它是按 **Anthropic Effective Harnesses for Long-Running Agents** + **Linux kernel mechanism vs policy** + **Redis eviction policy** 的工程哲学,**专为 Claude Code 的 hook 系统**设计的长期记忆 + 自动化 harness。
+>
+> **v0.2 关键变化**:从 v0.1 的「每 cwd 独立 mem_root」改为 **按 git origin 派生 project-key** 隔离 — 不依赖 cwd,不依赖 git-common-dir,worktree 天然走通。详见决策 7。
 
 ## 核心哲学:Listener + Handler
 
@@ -98,14 +100,17 @@ Memex 的 hook = mechanism,LLM = policy。
 
 我们要的是"轻量、可读、可降级",JSONL 完胜。规模到 10000+ 条时再考虑迁移。
 
-### 决策 2:为什么每 cwd 独立 mem_root,不共享 feedback
+### 决策 2:为什么 feedback 拆 global / per-project 两层(v0.2)
 
 **问题**:用户的纪律(比如"redis 走 Lua")是不是该全局共享?
 
-**反对方**:纪律是跨项目的,共享更省。
-**赞成方(采纳)**:不同项目的纪律不同(Go 项目和 Python 项目纪律差远),共享会污染。隔离最简单。
+**v0.1 做法**:每 cwd 一份 feedback,不共享。问题:跨项目通用的纪律(commit 规范等)在每个 cwd 都得复制。
 
-**结果**:每 cwd 一份 feedback。重复条目 = 用户主动维护(可以软链接同一文件)。
+**v0.2 做法**:
+- `memex/global/feedback/` — 跨项目纪律(默认归属)
+- `memex/projects/<key>/feedback/` — 项目专属纪律(用 reference_project_overrides 显式分类)
+
+**结果**:跨项目通用 + 项目专属各得其所,用户写时 Claude 自决策归属。
 
 ### 决策 3:为什么 LRU 30d × 3 次压缩,不是直接删
 
@@ -176,7 +181,7 @@ Memex 的 hook = mechanism,LLM = policy。
 | **Linux kernel** | mechanism vs policy(Lions' Commentary / Tanenbaum)| hook = mechanism, LLM = policy(强制责任分离)|
 | **Redis** — [eviction policies](https://redis.io/docs/manual/eviction/) | allkeys-lru / volatile-lfu / noeviction + 近似 LRU | status × decay:pinned ≈ noeviction,active 自动 demote ≈ allkeys-lru |
 | **Nginx** — master-worker + signal control | 失败 silent-degrade + 优雅 reload | hook 失败 exit 0 + ⚠️ ctx fallback 给 LLM(信号控制) |
-| **DDIA 第 3 章** — 索引设计(Martin Kleppmann) | append-only + inverted index | JSONL + by_branch.jsonl 倒排索引 |
+| **DDIA 第 3 章** — 索引设计(Martin Kleppmann) | append-only + inverted index | 3 重 JSONL + branches.jsonl 倒排索引 |
 | **Vannevar Bush** — [*As We May Think* (1945)](https://www.theatlantic.com/magazine/archive/1945/07/as-we-may-think/303881/) | Memex = associative trails of memory | 项目名 + `[[xxx]]` 内部链接的 associative trails |
 
 ### 为啥这么多参考?
@@ -191,10 +196,34 @@ Memex 的 hook = mechanism,LLM = policy。
 
 **Memex 在 Claude Code hook 层做** — 是没人占的空白,但也是离用户开发工作流最近的地方。每个事件触发、每个文件维护,都对应一条公开实践。**抄好抄满 + 自己补缺**。
 
+### 决策 7:为什么 v0.2 改成 project-key 隔离(替代 v0.1 cwd-slug)
+
+**问题**:v0.1 用 cwd-slug 隔离,但实际工作流是「workspace 父 cwd + N 个 git 子项目 cwd」,导致所有子项目共用主 cwd 池,跨项目记忆混在一起。
+
+**初版尝试**:让 hook 上溯找 mem_root(parent cwd 的 mem_root 优先)。问题:治标不治本,worktree、不同 cwd 启动还是裂。
+
+**修法(采纳)**:按 `git remote get-url origin` 归一化 + sha1[:12] 派生 `project-key`,跟 cwd / worktree 无关。同 origin 不同 worktree:同 key、不同 branch → 不同 memory 文件;同 origin 不同 cwd 启动:同 key 同 branch → 同一份 memory。
+
+**收益**:
+- 绕过 [Claude Code issue #39920](https://github.com/anthropics/claude-code/issues/39920)(git-common-dir 在 worktree 返主 worktree 的 bug)
+- 跨机器稳定(SSH/HTTPS 切换归一化后同 key)
+- 跟 Auto Memory 协作更干净(只在 MEMORY.md 末尾追加 bridge 块,不抢写权)
+
+### 决策 8:为什么 bridge 块只 @import 有内容的 project(v0.2)
+
+**问题**:bootstrap 扫 cwd 子目录可能发现几十个 git repo。如果全部 @import 进 MEMORY.md,会塞数十 KB ctx。
+
+**反对方**:扫到就 import,简单。
+**赞成方(采纳)**:只 @import `projects/<key>/` 下除 INDEX.md 外有任何 .md 的项目。新项目第一次写 memory 后,下次 session 自动进 bridge。
+
+**收益**:cold workspace 的 ctx 注入几乎为 0,active 项目自然累积。
+
+---
+
 ## 拓展点(欢迎 PR)
 
 - 新事件 hook:比如 PreCompact(在 Claude 压缩 ctx 前抢救关键 memory)
 - 新工具:`/memory-doctor`(自检 hook + jsonl + python 工具完整性)
 - 新存储:从 JSONL 迁 SQLite 应对 10000+ 规模
-- 新前端:WebUI 展示 memory 图谱(可视化 by_branch 关联)
+- 新前端:WebUI 展示 memory 图谱(可视化 branches.jsonl 关联)
 - 新 agent 移植:把哲学搬到 Cursor / Aider / Cline

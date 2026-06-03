@@ -11,11 +11,12 @@
 
 **症状**:
 - Auto Memory 跨 session 学习用户偏好 ✓(Anthropic 已经做了)
-- 但 Auto Memory **不切分支**:文档原话 "All worktrees and subdirectories of a project share the same memory directory"
+- 但 Auto Memory **不切分支**:文档原话 "Per repository, shared across worktrees"
 - 你在 feat/X 学到的"踩过的坑",切到 feat/Y 时 memory 仍然是同一份
+- 而且 worktree 因 [issue #39920](https://github.com/anthropics/claude-code/issues/39920) 实际全部映射到主 worktree
 
-**根因**:Anthropic 的设计决策(不是 bug),Auto Memory 是 cwd 级。
-**Memex 补的**:在 Auto Memory 之上加 cwd × 分支 二维隔离矩阵。
+**根因**:Anthropic 设计决策(不是 bug):Auto Memory 是 per-repo 级。
+**Memex 补的**:在 Auto Memory 之上加 **project × 分支** 二维隔离矩阵,按 git origin 派生 project-key,绕过 git-common-dir bug。
 
 **痛苦量化**:开发一个中型功能 = 10-30 个 session。每个 session 开头 5-10 分钟的"重新介绍" = 整个项目周期浪费 1-3 小时纯重复劳动。
 
@@ -71,9 +72,9 @@
 - 子项目 A 和 B 都有 `feat/<date>/login` 分支
 - Claude 切到 A 的 login,加载了 B 的 memory — 完全错乱
 
-**根因**:Claude 平台按 cwd 隔离 memory,但用户的工作流是**主 cwd 启动 Claude + cd subdir 跑命令**。hook 拿不到正确的 git 仓库根。
+**根因**:Claude 平台按 cwd-slug + git-common-dir 推 memory dir,但用户工作流是**主 cwd 启动 Claude + cd subdir 跑命令**,导致所有子项目共用主 cwd 的池。
 
-**痛苦量化**:多子项目场景下,Claude 的 branch-aware 行为完全失效。
+**Memex v0.2 怎么补**:按 `git remote get-url origin` 归一化 + sha1[:12] 派生 **project-key**,每个 git repo 独立 key,跟 cwd/worktree 无关,从根本上解决。
 
 ---
 
@@ -103,28 +104,37 @@
 
 ## Part 2 — Memex 怎么解(How)
 
-### 解 1:三层目录 + JSONL 索引
+### 解 1:双层池 + 3 重 JSONL 索引(v0.2)
 
 ```
-~/.claude/                          全局,任何 cwd 共享
-├── MEMORY_SPEC.md                  规范单一权威
+~/.claude/                          全局,装一次
+├── MEMORY_SPEC.md                  规范单一权威(11 节)
+├── MEMEX_GLOBAL_INDEX_TEMPLATE.md
+├── MEMEX_PROJECT_INDEX_TEMPLATE.md
 ├── hooks/  (7 件套)                 event listener
-└── bin/    (3 工具)                 python CLI
+└── bin/    (6 工具)                 python CLI
 
-~/.claude/projects/<cwd-slug>/memory/    每 cwd 独立
-├── INDEX.md
-├── _index/                         机器索引
-│   ├── meta.jsonl                  每条 memory 一行(LRU + decay + size)
-│   └── by_branch.jsonl             (project, branch) → memory_path 倒排
-├── feedback/                       纪律
-├── reference/                      外部资源
-├── global/                         跨业务的项目级
-└── projects/<biz>/
+~/.claude/memex/                    全局池(project 维度,无 cwd 维度)
+├── _index/
+│   ├── projects.jsonl              project-key → 元数据
+│   ├── branches.jsonl              (project_key, branch_slug) → memory_path 倒排
+│   └── meta.jsonl                  每条 memory 一行(LRU + decay + size)
+├── global/                         跨项目
+│   ├── INDEX.md                    所有 cwd 都 @import 它
+│   ├── feedback/                   跨项目纪律
+│   └── reference/                  跨项目外部引用
+└── projects/<project-key>/         一个 git repo = 一个 key
+    ├── INDEX.md                    项目门面(被 Claude MEMORY.md @import)
     ├── overview.md
-    └── branches/<slug>.md
+    ├── feedback/                   项目专属
+    ├── reference/                  项目专属
+    └── branches/<slug>.md          分支记忆只此一份
+
+~/.claude/projects/<cc-slug>/memory/  Claude Code Auto Memory(不动)
+└── MEMORY.md                       末尾被 bootstrap 幂等追加 memex:bridge 块
 ```
 
-**对痛点 1**:全局规范 + 每 cwd 独立工作面 → 每次新 session 自动加载 INDEX.md → Claude 一上来就知道项目背景
+**对痛点 1**:bridge 把全局池注入 Claude MEMORY.md → 每次新 session 自动加载 Claude 一上来就知道项目背景
 **对痛点 4**:jq 索引 O(1) 查询 → 千级 memory 一行命令命中
 
 ### 解 2:Listener + Handler 哲学
@@ -148,11 +158,13 @@ Write/Edit memory(persistent state)
 
 | Hook | 解的痛点 | 怎么解 |
 |---|---|---|
-| `session-bootstrap.sh` | #1 #5 | 新 cwd 自动建骨架 + 检测索引漂移自动 reindex |
+| `session-bootstrap.sh` | #1 #5 | 扫 cwd 子目录所有 git repo,建项目骨架 + 在 Claude MEMORY.md 末尾搭 bridge |
 | `pre-read-memory-bump.sh` | #3 | Read feedback 自动更新 last_access,LRU 不误杀 |
-| `check-protected-branch.sh` | #2 | 切分支收档+启档,目标 memory 内容直接注入 ctx |
-| `pre-edit-branch-notice.sh` | #2 | 编辑前提醒本分支 memory,防 LLM 写错分支 |
-| `post-write-memory-sync.sh` | #4 | memory 文件改后自动入 jsonl 索引 |
+| `check-protected-branch.sh` | — | 拦保护分支 commit/push(exit 2) |
+| `pre-edit-branch-notice.sh` | #2 | 编辑前 derive_project_key + 查 branches.jsonl,提示本分支 memory |
+| `post-checkout-handoff.sh` | #2 | 切分支完成后(PostToolUse),让 LLM 并行 Write from + Read to |
+| `post-write-memory-sync.sh` | #4 | memex 文件改后自动入 jsonl + 刷 INDEX.md |
+| `session-start-lru.sh` | #6 | 启动时主动跑 LRU 扫,有候选塞 ctx 让 LLM 决定压缩 |
 
 ### 解 4:LRU 30d × 3 次压缩
 
@@ -170,13 +182,15 @@ pinned                         → 永不淘汰(用户显式锁)
 **对痛点 6**:旧 memory 自动压缩成骨架,关键 Why/决策保留,流水账消失
 **对痛点 3**:Read 自动续命,read-heavy 的 feedback 永远活着
 
-### 解 5:多 cwd 严格隔离 + monorepo 支持
+### 解 5:project-key 隔离 + monorepo 原生支持(v0.2)
 
-- 每个 cwd 独立 mem_root,hook 不跨 cwd glob
-- check-protected-branch 解析 `cd <path>` / `git -C <path>` 拿子项目分支
+- 单一身份来源 `derive_project_key.py`,所有 hook 调它
+- `branches.jsonl` 按 `(project_key, branch_slug)` 二维倒排
+- 跨 worktree / 跨 cwd 一致(绕过 [issue #39920](https://github.com/anthropics/claude-code/issues/39920))
+- post-checkout-handoff / pre-edit-branch-notice 解析 `cd <path>` / `git -C <path>` 拿子项目分支
 - pre-edit-branch-notice 从 file_path dirname 反推 git 根
 
-**对痛点 5**:子项目 A 的 `feat/<date>/x` 不会串到 B
+**对痛点 5**:子项目 A 和 B 的 `feat/<date>/x` 完全独立 — 即使同名,project_key 不同 → 两份 memory 文件,jq 命中各自
 
 ### 解 6:失败兜底 ctx 闭环
 
@@ -215,10 +229,11 @@ hook 解析失败 → 塞 ⚠️ ctx → LLM 接管:
 
 ### 工程优雅
 
-1. **零侵入**:不改 Claude 本身,只装 hook + 工具
+1. **零侵入**:不改 Claude 本身,只装 hook + 工具;Auto Memory 的 `MEMORY.md` 只在末尾追加 bridge 块
 2. **零锁定**:memory 都是 plain markdown + jsonl,卸载后文件仍在
 3. **可降级**:任何 hook 失败,LLM 自动兜底,从不阻断
 4. **可演进**:加新 hook = 加文件 + 注册;改 LRU 周期 = 一个环境变量
+5. **可回滚**:v0.1 → v0.2 一次性迁移,旧池保留 LRU 自然回收
 
 ---
 

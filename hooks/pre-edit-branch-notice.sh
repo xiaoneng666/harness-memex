@@ -1,36 +1,54 @@
 #!/bin/bash
-# pre-edit-branch-notice.sh — PreToolUse(Edit|Write|MultiEdit) hook
+# pre-edit-branch-notice.sh — PreToolUse(Edit|Write|MultiEdit)  (Memex v0.2)
 #
-# 每 session 每分支首次编辑文件时,把「当前分支 + 对应 memory 文件」注入 ctx,
-# 让 LLM 写代码前意识到在哪个分支、本分支本来该干啥。
+# 每 session 每分支首次编辑代码文件时,把对应的 (project_key, branch) memory
+# 路径塞 ctx,让 LLM 写代码前 Read 一下。
 #
-# 去重:同 session 同分支只提示一次。切换分支(slug 变)重提一次。
-# 自定义保护分支:export MEMEX_PROTECTED_BRANCHES="main master develop staging"
+# 去重:同 session 同 project_key 同 branch 只提示一次。
 
 input=$(cat)
 sid=$(printf '%s' "$input" | jq -r '.session_id // "nosess"' 2>/dev/null)
-
-# 从 file_path 反推 git 仓库(支持 monorepo 子项目)
 fpath=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
 
-# Early return:Write/Edit memory 文件本身,跟"分支 memory 提醒"无关 — 静默
-# (这种 hook 触发是 LLM 维护 memory 时的副作用,不是业务代码编辑)
+# Early return:Write memory / spec / template 自身 → 静默
 case "$fpath" in
-  *"/.claude/projects/"*"/memory/"*) exit 0 ;;
-  *"/.claude/MEMORY_SPEC.md"|*"/.claude/INDEX_TEMPLATE.md") exit 0 ;;
+  "$HOME/.claude/memex/"*) exit 0 ;;
+  "$HOME/.claude/projects/"*"/memory/"*) exit 0 ;;
+  "$HOME/.claude/MEMORY_SPEC.md"|"$HOME/.claude/"*"_TEMPLATE.md") exit 0 ;;
 esac
 
+# 反推 git 仓库:用 file 所在目录的 toplevel
 if [ -n "$fpath" ]; then
   git_dir=$(dirname "$fpath")
 else
   git_dir="."
 fi
+
+repo_root=$(git -C "$git_dir" rev-parse --show-toplevel 2>/dev/null)
 branch=$(git -C "$git_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
-# ─── 保护分支列表 ───
-DEFAULT_PROTECTED="main develop production staging"
-PROTECTED_BRANCHES="${MEMEX_PROTECTED_BRANCHES:-$DEFAULT_PROTECTED}"
+# 拿不到 → 静默
+[ -z "$repo_root" ] && exit 0
+[ -z "$branch" ] && exit 0
 
+PYTHON3=$(command -v python3 2>/dev/null || echo /usr/bin/python3)
+DERIVE_KEY="$HOME/.claude/bin/derive_project_key.py"
+MEMEX="$HOME/.claude/memex"
+
+info=$("$PYTHON3" "$DERIVE_KEY" "$repo_root" 2>/dev/null)
+project_key=$(printf '%s' "$info" | jq -r '.key // ""' 2>/dev/null)
+[ -z "$project_key" ] || [ "$project_key" = "null" ] && exit 0
+display=$(printf '%s' "$info" | jq -r '.display_name // ""' 2>/dev/null)
+
+# 去重 marker(slug 化分支名)
+slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
+marker="/tmp/memex-pre-edit-${sid}-${project_key}-${slug}"
+[ -f "$marker" ] && exit 0
+touch "$marker" 2>/dev/null
+
+# 保护分支预警
+DEFAULT_PROTECTED="main master develop production staging"
+PROTECTED_BRANCHES="${MEMEX_PROTECTED_BRANCHES:-$DEFAULT_PROTECTED}"
 is_protected() {
   local b="$1"
   for p in $PROTECTED_BRANCHES; do
@@ -39,69 +57,53 @@ is_protected() {
   return 1
 }
 
-if [ -z "$branch" ]; then
-  # 兜底:file 在常见 project 路径下但 git 不识别 → 提醒 LLM 接管
-  case "$fpath" in
-    */project/*|*/projects/*|*/code/*|*/workspace/*|*/repos/*)
-      ctx="⚠️ 编辑 ${fpath} 但 hook 没识别 git 分支(cwd 和 file dirname 都不在 git 仓库下)。
-按 ~/.claude/MEMORY_SPEC.md § 四+九 自决策:
-1) 自己 git -C \$(dirname ${fpath}) rev-parse 拿分支
-2) 看本 cwd by_branch.jsonl 是否有对应 memory
-3) 若是长期工作分支,改动前考虑建/更新 memory"
-      jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
-      ;;
-  esac
+if is_protected "$branch"; then
+  ctx="⚠️ ${display}: 正在保护分支 [${branch}] 编辑文件 — 一般不该直接改主干,确认是否该先切 feat/bugfix。"
+  jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
   exit 0
 fi
 
-slug=$(printf '%s' "$branch" | sed 's#[/-]#_#g')
-marker="/tmp/harness-memex-br-${sid}-${slug}"
-[ -f "$marker" ] && exit 0
-touch "$marker" 2>/dev/null
+# 查 branches.jsonl(O(1))
+memfile=""
+idx="$MEMEX/_index/branches.jsonl"
+if [ -f "$idx" ]; then
+  rel=$(jq -r --arg k "$project_key" --arg b "$slug" \
+        'select(.project_key==$k and .branch_slug==$b) | .memory_path' \
+        "$idx" 2>/dev/null | head -1)
+  if [ -n "$rel" ] && [ -f "$MEMEX/$rel" ]; then
+    memfile="$MEMEX/$rel"
+  fi
+fi
+# fallback glob
+[ -z "$memfile" ] && memfile=$(ls "$MEMEX/projects/$project_key/branches/${slug}.md" 2>/dev/null | head -1)
 
-if is_protected "$branch"; then
-  ctx="⚠️ 正在保护分支 [${branch}] 上编辑文件 — 改动一般不该直接落主干,确认是否该先切 feat/bugfix 分支。"
+project_index="$MEMEX/projects/$project_key/INDEX.md"
+
+if [ -n "$memfile" ]; then
+  ctx="开改核实 · ${display} · 当前分支: ${branch}
+
+并行 Read(同回合发,把项目共享 + 分支层一次拉齐):"
+  [ -f "$project_index" ] && ctx="$ctx
+  · ${project_index}(项目共享层:overview / feedback / reference)"
+  ctx="$ctx
+  · ${memfile}(本分支 memory:进度 / 决策 / 踩坑)"
 else
-  # 上溯找 mem_root(spec § 九 A 方案,支持 monorepo workspace)
-  find_mem_root() {
-    local cwd="$1"
-    while [ -n "$cwd" ] && [ "$cwd" != "/" ]; do
-      local s
-      s=$(printf '%s' "$cwd" | sed 's#/#-#g')
-      local mr="$HOME/.claude/projects/${s}/memory"
-      if [ -f "$mr/_index/by_branch.jsonl" ]; then
-        echo "$mr"
-        return 0
-      fi
-      cwd=$(dirname "$cwd")
-    done
-    local s
-    s=$(printf '%s' "$(pwd)" | sed 's#/#-#g')
-    echo "$HOME/.claude/projects/${s}/memory"
-  }
-  mem_root=$(find_mem_root "$(pwd)")
-  memfile=""
-  if [ -d "$mem_root" ]; then
-    idx="$mem_root/_index/by_branch.jsonl"
-    if [ -f "$idx" ]; then
-      rel=$(jq -r --arg b "$branch" 'select(.branch==$b) | .memory' "$idx" 2>/dev/null | head -1)
-      if [ -n "$rel" ] && [ -f "$mem_root/$rel" ]; then
-        memfile="$mem_root/$rel"
-      fi
-    fi
-    [ -z "$memfile" ] && memfile=$(ls "$mem_root"/projects/*/*/branches/"${slug}".md 2>/dev/null | head -1)
-    [ -z "$memfile" ] && memfile=$(ls "$mem_root"/projects/*/branches/"${slug}".md 2>/dev/null | head -1)
-  fi
+  suggested="$MEMEX/projects/$project_key/branches/${slug}.md"
+  ctx="开改核实 · ${display} · 当前分支: ${branch}
+⚠️ 本分支暂无 memory。建议路径: ${suggested}
 
-  if [ -n "$memfile" ]; then
-    ctx="开改核实 · 当前分支: ${branch} · 本分支记忆: ${memfile}
+先 Read project INDEX 把项目共享层拉齐:"
+  [ -f "$project_index" ] && ctx="$ctx
+  · ${project_index}"
+  ctx="$ctx
 
-开改前先 Read 此文件,确认本次改动属于该分支 + 了解前面已做到哪一步。"
-  else
-    ctx="开改核实 · 当前分支: ${branch} · ⚠️ 本分支暂无 memory 文件
+按 spec § 五 自决策:长期分支建议立档,临时分支可跳。"
+fi
 
-按 ~/.claude/MEMORY_SPEC.md § 四 自决策:是否需要立档(长期工作分支建议立、临时分支可跳)。"
-  fi
+# 后台 touch:更新 projects.jsonl.last_access,让下次 session bootstrap 把本 project 加进 bridge
+BRIDGE_PY="$HOME/.claude/bin/update_memex_bridge.py"
+if [ -f "$BRIDGE_PY" ]; then
+  "$PYTHON3" "$BRIDGE_PY" --touch "$project_key" --repo "$repo_root" >/dev/null 2>&1 &
 fi
 
 jq -nc --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'

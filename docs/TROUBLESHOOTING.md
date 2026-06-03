@@ -59,28 +59,31 @@ python3 ~/.claude/bin/update_index_md.py
 <!-- AUTO:END project-table -->
 ```
 
-## 多 cwd 同名分支 memory 串了
+## 多项目同名分支 memory 串了
 
-**现象**:cwd A 切 `feat/X`,看到 cwd B 的 `feat/X` memory。
+**现象**:project A 切 `feat/X`,看到 project B 的 `feat/X` memory。
 
-**检查**:
-1. 看 hook 代码 lookup_branch_memory 是不是只查当前 cwd 的 mem_root(spec § 九)
-2. 是的话不该串。报 issue 给 repo
+**检查**(v0.2):
+1. `python3 ~/.claude/bin/derive_project_key.py <repoA>` 和 `<repoB>` 看 key 是否不同
+2. 不同则 `branches.jsonl` 里两条独立,不该串。`jq -c 'select(.branch_slug=="feat_X")' ~/.claude/memex/_index/branches.jsonl` 看
+3. 若 key 相同,可能两 repo 共享同一 origin(罕见)→ 用 `repo_paths_seen` 区分,或手动改 origin
 
-## monorepo 子项目分支 hook 不识别
+## monorepo / workspace 子项目分支 hook 不识别
 
 **现象**:Claude cwd=`~/project/monorepo`(不是 git 仓库根),用户跑 `cd subapp && git checkout feat/X`,hook 没识别。
 
-**已支持**(从 `cd <path>` 解析子项目):跑命令格式必须是 `cd <path> && git ...` 或 `git -C <path> ...`,**否则不识别**。
+**已支持**(spec § 七 两种最简形式):
+- `cd <path> && git ...`
+- `git -C <path> ...`
 
-**确认**:
+**确认**(注意:测试时用 `printf '%s'` 而非 `echo`,避免 bash xpg_echo 把 `\n` 字面解成真换行,破坏 JSON):
 ```bash
-# 在 cwd=monorepo 测
-echo '{"tool_input":{"command":"cd subapp && git checkout feat/X"}}' | bash ~/.claude/hooks/check-protected-branch.sh
-# 应该看到 ctx 注入
+printf '%s' '{"tool_input":{"command":"cd subapp && git checkout feat/X"},"tool_response":{"exitCode":0}}' \
+  | bash ~/.claude/hooks/post-checkout-handoff.sh
+# 应该看到 ctx 注入,含 project_key 路径
 ```
 
-不工作 → 检查 `subapp/.git` 在不在 / `feat/X` 分支真存在不存在。
+不工作 → 检查 `subapp/.git` 在不在 / `feat/X` 分支真存在不存在 / `derive_project_key.py <subapp>` 返不返 key。
 
 ## LRU 扫不到任何候选
 

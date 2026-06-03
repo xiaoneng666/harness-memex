@@ -84,12 +84,12 @@
 ## 为什么 Memex 仍然值得开源
 
 **唯一独有的事**:
-1. 跟 Auto Memory 协作(`@import` 不抢资源)
-2. **同 Claude 进程内多 cwd × 多分支** 工作面隔离矩阵(其它都是单 cwd)
-3. monorepo 子项目分支识别(`cd <subdir>` / `git -C` 解析)
+1. 跟 Auto Memory 协作(在 `MEMORY.md` 末尾幂等追加 `<!-- memex:bridge -->` 块 + `@import`,不抢写权)
+2. **按 git origin 派生 project-key 隔离**:同 Claude 进程内**多项目 × 多分支**矩阵,跨 worktree / 跨 cwd / 跨启动位置一致(绕过 Claude Code [issue #39920](https://github.com/anthropics/claude-code/issues/39920))
+3. monorepo / workspace 子项目分支识别(`cd <subdir>` / `git -C` 解析)
 4. 显式 LRU 状态机 + 60d 防误删 + 软删 `_trash/`
 5. 失败兜底 ctx 闭环(silent degrade 但不 silent fail)
-6. 中英双语 + 5 篇 docs + 端到端测试 + 一键安装
+6. 中英双语 + 5+ 篇 docs + 端到端测试 + 一键安装
 
 但**不是**:
 - "重新发明 memory" — Anthropic 做了根基
