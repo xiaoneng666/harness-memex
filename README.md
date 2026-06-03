@@ -61,6 +61,7 @@ Memex 补这块:
 | memory 越多越难找 | JSONL 索引 O(1) 查,jq 一行命中 |
 | 长开发期 context bloat | 30d × 3 次自动压缩,关键决策永久保留 |
 | 多项目同名分支串记忆 | project-key(git origin)隔离,worktree / monorepo / 多 cwd 都正确 |
+| 一次需求跨 2~9 仓,单仓 memory 看不到全貌(漏拉/漏部署)| `feedback-companion-repo-branches` recipe:分支 memory 强制列「配合开发的其他仓库分支」,任一仓切入都见全貌 |
 
 ---
 
@@ -86,6 +87,9 @@ Claude Code Auto Memory 是 cwd 级一份 memory,**所有 worktree / 子目录�
 
 ### 痛点 6 — 老 memory 不淘汰
 Auto Memory 不主动压缩老 memory。3 个月后 200 条混在一起,关键决策跟过期 TODO 没区分。
+
+### 痛点 7 — 跨仓库联动开发丢全貌
+一次业务需求经常跨 2~9 个仓(如 service-a RPC + bff-x 透传 + service-b 拦截)。**只看单仓分支 memory 不知道还动了哪些其他仓的哪些分支** → 容易漏拉、漏合 develop、漏部署。Memex 推荐 [`feedback-companion-repo-branches`](./examples/feedback-companion-repo-branches.md) recipe 强制在分支 memory 列「配合开发的其他仓库分支」(仓 + 分支 + < 20 字关系 + `[[memory]]` 双向链接),任一仓切入都能立刻看到全貌,跟 `branch-naming-consistency` + `report-repos-after-each-change` 三件套形成闭环。
 
 ---
 
