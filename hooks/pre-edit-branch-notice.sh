@@ -12,6 +12,14 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // "nosess"' 2>/dev/null)
 
 # 从 file_path 反推 git 仓库(支持 monorepo 子项目)
 fpath=$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
+
+# Early return:Write/Edit memory 文件本身,跟"分支 memory 提醒"无关 — 静默
+# (这种 hook 触发是 LLM 维护 memory 时的副作用,不是业务代码编辑)
+case "$fpath" in
+  *"/.claude/projects/"*"/memory/"*) exit 0 ;;
+  *"/.claude/MEMORY_SPEC.md"|*"/.claude/INDEX_TEMPLATE.md") exit 0 ;;
+esac
+
 if [ -n "$fpath" ]; then
   git_dir=$(dirname "$fpath")
 else
